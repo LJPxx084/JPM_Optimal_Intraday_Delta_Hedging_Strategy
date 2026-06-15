@@ -1,0 +1,10 @@
+numpy
+pandas
+scipy
+matplotlib
+seaborn
+jupyterlab
+ipykernel
+tqdm
+pyyaml
+pytest
