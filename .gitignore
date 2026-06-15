@@ -6,7 +6,7 @@ __pycache__/
 venv/
 .env
 
-data/raw/*
+# data/raw/*
 data/simulated/*
 data/processed/*
 outputs/figures/*
