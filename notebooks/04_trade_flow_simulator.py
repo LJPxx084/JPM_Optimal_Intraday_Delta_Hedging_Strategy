@@ -28,14 +28,7 @@ Data source
 -----------
 Each trading day in the range is fetched from Databento and cached to
 ``data/raw/glbx-mdp3-YYYYMMDD.tbbo.csv`` (same name/format as the bundled
-sample).  A cached day is reused; only missing days hit the API.  The API key
-is read from the ``DATABENTO_API_KEY`` environment variable -- it is never
-stored in this file.
-
-    # PowerShell
-    $env:DATABENTO_API_KEY = "db-..."
-    # bash
-    export DATABENTO_API_KEY="db-..."
+sample).  A cached day is reused; only missing days hit the API.
 
 Usage
 -----
@@ -120,9 +113,11 @@ class Config:
     raw_dir: str = str(RAW_DIR)
 
     out_path: str = str(SIMULATED_DIR / "simulated_executed_trades.csv")
-    # Simulated executed trades per trading day. None -> match that day's own
-    # number of real vanilla prints, so daily intensity tracks the real tape.
+    # Simulated executed trades per trading day. None -> derive from mm_fraction.
     n_trades_per_day: int | None = None
+    # Fraction of real daily vanilla volume we assume we market-make.
+    # Used only when n_trades_per_day is None.
+    mm_fraction: float = 0.30
     seed: int = 42
 
     # --- regular trading hours (US Eastern); the tape is filtered to this
@@ -249,9 +244,15 @@ class MarketData:
         self.n_combo_rows = self.n_total_rows - self.n_vanilla_rows
         self.trades = df
 
-        # ---- per option line: volume, VWAP price, and the option's own size pool ----
+        # Detect bid/ask columns (present in TBBO exports).
+        has_ba = "bid_px_00" in df.columns and "ask_px_00" in df.columns
+        self.has_bid_ask = has_ba
+
+        # ---- per option line: volume, VWAP price, and the option's own trade pools ----
         lines = []
-        size_pools = {}
+        size_pools: dict[str, np.ndarray] = {}
+        bid_pools: dict[str, np.ndarray] = {}
+        ask_pools: dict[str, np.ndarray] = {}
         for sym, g in df.groupby("symbol"):
             volume = int(g["size"].sum())
             lines.append({
@@ -264,12 +265,16 @@ class MarketData:
                 "n_obs": len(g),
             })
             size_pools[sym] = g["size"].to_numpy()
+            if has_ba:
+                bid_pools[sym] = g["bid_px_00"].to_numpy()
+                ask_pools[sym] = g["ask_px_00"].to_numpy()
         self.lines = pd.DataFrame(lines).set_index("symbol")
 
-        # Each option's own observed trade sizes, aligned to the positional order
-        # of ``lines``. A simulated trade's size is bootstrapped from the SAME
-        # option it lands on, so a line only ever shows sizes it actually traded.
+        # Pools aligned to positional order of ``lines``.  Size, bid, and ask are
+        # sampled from the same index so they stay correlated (spread varies by event).
         self.size_pools = [size_pools[s] for s in self.lines.index]
+        self.bid_pools = ([bid_pools[s] for s in self.lines.index] if has_ba else None)
+        self.ask_pools = ([ask_pools[s] for s in self.lines.index] if has_ba else None)
 
 
 # --------------------------------------------------------------------------- #
@@ -298,6 +303,22 @@ class TimeSampler:
 
 
 # --------------------------------------------------------------------------- #
+# Volume-targeting helper
+# --------------------------------------------------------------------------- #
+def _target_trade_count(mkt: MarketData, mm_fraction: float) -> int:
+    """Return N such that expected simulated contract volume ≈ mm_fraction × real vanilla volume."""
+    total_real_vol = int(mkt.lines["volume"].sum())
+    target_vol = mm_fraction * total_real_vol
+    vol = mkt.lines["volume"].to_numpy(dtype=float)
+    p = vol / vol.sum()
+    mean_sizes = np.array([pool.mean() for pool in mkt.size_pools])
+    expected_mean_size = float(np.dot(p, mean_sizes))
+    if expected_mean_size <= 0:
+        return 1
+    return max(1, round(target_vol / expected_mean_size))
+
+
+# --------------------------------------------------------------------------- #
 # Trade simulator (one trading day; shares a single RNG across days)
 # --------------------------------------------------------------------------- #
 class TradeSimulator:
@@ -317,15 +338,23 @@ class TradeSimulator:
         vol = lines["volume"].to_numpy(dtype=float)
         chosen = rng.choice(len(symbols), size=n_trades, p=vol / vol.sum())
 
-        # (3) SIZE: bootstrap from THIS option's own observed trade sizes. Grouped
-        # by chosen line so the per-symbol draw stays vectorized for large n.
+        # (3) SIZE / BID / ASK: bootstrap from THIS option's own observed trade
+        # events.  A single random index into the pool gives (size, bid, ask) from
+        # the same real event, preserving their natural correlation.
         qty = np.empty(n_trades, dtype=np.int64)
+        bid = np.full(n_trades, np.nan)
+        ask = np.full(n_trades, np.nan)
         order = np.argsort(chosen, kind="stable")
         uniq, starts = np.unique(chosen[order], return_index=True)
         bounds = list(starts) + [n_trades]
         for j, line_idx in enumerate(uniq):
             seg = order[bounds[j]:bounds[j + 1]]
-            qty[seg] = rng.choice(mkt.size_pools[line_idx], size=len(seg))
+            pool_sz = len(mkt.size_pools[line_idx])
+            idxs = rng.integers(0, pool_sz, size=len(seg))
+            qty[seg] = mkt.size_pools[line_idx][idxs]
+            if mkt.has_bid_ask:
+                bid[seg] = mkt.bid_pools[line_idx][idxs]
+                ask[seg] = mkt.ask_pools[line_idx][idxs]
 
         # (2) BUY vs SELL: even 50/50.
         sides = np.where(rng.random(n_trades) < 0.5, "BUY", "SELL")
@@ -346,6 +375,8 @@ class TradeSimulator:
             "strike": lines["strike"].to_numpy()[chosen],
             "side": sides,
             "quantity": qty,
+            "bid": bid,
+            "ask": ask,
             "exec_price": lines["vwap_price"].to_numpy()[chosen],
         })
 
@@ -377,7 +408,7 @@ def run(cfg: Config) -> pd.DataFrame:
             print(f"  {d}  no vanilla trades -- skipped")
             continue
 
-        n = cfg.n_trades_per_day or mkt.n_vanilla_rows
+        n = cfg.n_trades_per_day or _target_trade_count(mkt, cfg.mm_fraction)
         per_day.append(TradeSimulator(mkt, cfg, rng).simulate(n))
 
         # Accumulate real-tape references for the end-of-run validation report.
@@ -389,8 +420,9 @@ def run(cfg: Config) -> pd.DataFrame:
         tot_rows += mkt.n_total_rows
         tot_vanilla += mkt.n_vanilla_rows
         tot_combo += mkt.n_combo_rows
+        real_vol = int(mkt.lines["volume"].sum())
         print(f"  {d}  RTH(T) {mkt.n_total_rows:6,}  vanilla {mkt.n_vanilla_rows:6,}"
-              f"  lines {len(mkt.lines):4,}  -> sim {n:6,}")
+              f"  real_vol {real_vol:7,}  lines {len(mkt.lines):4,}  -> sim {n:6,}")
 
     if not per_day:
         raise SystemExit("No tradable days produced -- nothing to write.")
@@ -410,15 +442,19 @@ def run(cfg: Config) -> pd.DataFrame:
 
 def _report(cfg, trades, real_vol_by_symbol, real_hour_vol,
             tot_rows, tot_vanilla, tot_combo, out_path):
+    has_ba = not trades["bid"].isna().all()
     print("-" * 70)
     print(f"Generated {len(trades):,} executed trades -> {out_path}")
     print(f"  Span            : {trades['timestamp'].min().date()} .. "
           f"{trades['timestamp'].max().date()}")
     print(f"  Real RTH prints : {tot_rows:,}  "
           f"(vanilla {tot_vanilla:,} / combos excluded {tot_combo:,})")
+    print(f"  MM fraction     : {cfg.mm_fraction:.0%} of real vanilla volume"
+          + (" (overridden by --n-trades-per-day)" if cfg.n_trades_per_day else ""))
     print(f"  Buy/Sell split  : {(trades.side == 'BUY').mean():.1%} / "
           f"{(trades.side == 'SELL').mean():.1%}")
     print(f"  Total contracts : {int(trades['quantity'].sum()):,}")
+    print(f"  Bid/Ask in CSV  : {'yes' if has_ba else 'no (bid_px_00/ask_px_00 absent from raw)'}")
 
     # Distribution match: simulated vs real per-symbol volume share over the period.
     real_vol = pd.Series(real_vol_by_symbol, dtype=float)
@@ -461,13 +497,16 @@ def main():
     p.add_argument("--out", default=Config.out_path,
                    help="output CSV (default: data/simulated/...)")
     p.add_argument("--n-trades-per-day", type=int, default=Config.n_trades_per_day,
-                   help="fixed simulated trades per day "
-                        "(default: match each day's real vanilla print count)")
+                   help="fixed simulated trades per day (overrides --mm-fraction)")
+    p.add_argument("--mm-fraction", type=float, default=Config.mm_fraction,
+                   help="fraction of real daily vanilla volume to market-make "
+                        "(default: 0.20; ignored when --n-trades-per-day is set)")
     p.add_argument("--seed", type=int, default=Config.seed)
     args = p.parse_args()
 
     cfg = Config(start_date=args.start, end_date=args.end, out_path=args.out,
-                 n_trades_per_day=args.n_trades_per_day, seed=args.seed)
+                 n_trades_per_day=args.n_trades_per_day,
+                 mm_fraction=args.mm_fraction, seed=args.seed)
 
     print("=" * 70)
     print("  SP500 OPTION TRADE-FLOW SIMULATOR")
