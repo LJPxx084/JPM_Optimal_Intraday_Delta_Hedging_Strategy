@@ -1,0 +1,360 @@
+\documentclass{article}
+
+\usepackage{amsmath}
+\usepackage{booktabs}
+\usepackage{enumitem}
+\usepackage[most]{tcolorbox}
+
+\newtcolorbox{eqbox}{colback=blue!6!white, colframe=blue!45!black,
+  boxrule=0.8pt, sharp corners, left=2pt, right=2pt, top=2pt, bottom=2pt}
+\newtcolorbox{whybox}{colback=black!4!white, colframe=black!4!white,
+  borderline west={2pt}{0pt}{black!30}, sharp corners,
+  left=6pt, right=6pt, top=4pt, bottom=4pt}
+
+% Compact variable-definition list placed under each equation
+\newlist{vardefs}{itemize}{1}
+\setlist[vardefs]{label=--, nosep, leftmargin=1.6em, topsep=2pt}
+
+\begin{document}
+
+\section{Strategy and Experimental Design}
+
+\subsection{Hedging Strategy: Static No-Trade Band}
+
+The strategy monitors the book's net delta $\Delta(t)$ on a 5-minute grid and keeps a
+static no-trade band around the target $\Delta_{\text{target}} = 0$:
+
+\begin{eqbox}
+\begin{equation}
+-H \le \Delta(t) \le H.
+\end{equation}
+\end{eqbox}
+
+\begin{vardefs}
+\item $\Delta(t)$: net delta of the option book at time $t$, measured in ES futures
+  contract equivalents (positive = long the market);
+\item $H$: half-width of the no-trade band, in ES contract equivalents.
+\end{vardefs}
+
+While $\Delta(t)$ remains inside the band, the system does nothing and no execution cost
+is incurred. A hedge is triggered only when the breach clears the band by a buffer
+$\epsilon$:
+
+\begin{eqbox}
+\begin{equation}
+\lvert \Delta(t) \rvert > H(1+\epsilon),
+\label{eq:trigger}
+\end{equation}
+\end{eqbox}
+
+\begin{vardefs}
+\item $\epsilon$: breach buffer, expressed as a fraction of $H$ (e.g.\ $\epsilon = 5\%$
+  requires the delta to clear the band by an extra 5\% before hedging).
+\end{vardefs}
+
+Once triggered, the parent hedge order returns the book to flat:
+
+\begin{eqbox}
+\begin{equation}
+Q_t = -\Delta(t).
+\end{equation}
+\end{eqbox}
+
+\begin{vardefs}
+\item $Q_t$: signed parent hedge order in ES futures contracts (a long book sells
+  futures, a short book buys futures).
+\end{vardefs}
+
+\textbf{Post-hedge cooldown.} After a hedge schedule completes, the trigger in
+Equation~\eqref{eq:trigger} is suppressed for a minimum interval $T_{\text{cooldown}}$,
+unless the breach is large ($\lvert \Delta(t) \rvert > 2H$). This prevents the system from
+immediately re-triggering a fresh schedule on the next small delta arrival. At market
+close, any remaining delta is forcibly flattened, so every strategy configuration
+satisfies the delta-flat overnight constraint $\Delta(T) = 0$ by construction.
+
+\subsection{Execution: TWAP and VWAP Schedules}
+
+Once triggered, the parent order $Q_t$ is split into child orders over an execution
+horizon $\tau$, i.e.\ over $N = \tau / 5\,\text{min}$ consecutive bars. Under TWAP the
+child orders are equal-sized; under VWAP they are proportional to the ES futures volume
+observed in each bar of the horizon:
+
+\begin{eqbox}
+\begin{equation}
+q_k^{\text{TWAP}} = \frac{Q_t}{N},
+\qquad
+q_k^{\text{VWAP}} = Q_t\,\hat{w}_k,
+\qquad
+\sum_{k=1}^{N} \hat{w}_k = 1.
+\end{equation}
+\end{eqbox}
+
+\begin{vardefs}
+\item $q_k$: signed child order executed in bar $k$ of the schedule, in ES contracts;
+\item $\tau$: execution horizon after the trigger (minutes);
+\item $N$: number of 5-minute bars in the horizon, $N = \tau / 5\,\text{min}$;
+\item $\hat{w}_k$: bar $k$'s share of ES futures volume over the horizon, with
+  $\sum_k \hat{w}_k = 1$.
+\end{vardefs}
+
+If a new trigger fires while a schedule is still running, the old schedule is cancelled
+and replaced by a fresh one sized to the current residual delta.
+
+\subsection{Units and Book-Delta Measurement}
+
+All delta and hedge quantities are measured in ES futures contract equivalents. For each
+executed ES option trade $i$, its book-delta contribution is
+
+\begin{eqbox}
+\begin{equation}
+\Delta_{\text{new},i} = s_i \cdot n_i \cdot \delta_i.
+\label{eq:arrival}
+\end{equation}
+\end{eqbox}
+
+\begin{vardefs}
+\item $\Delta_{\text{new},i}$: book-delta contribution of option trade $i$, in ES
+  contract equivalents;
+\item $s_i \in \{+1,-1\}$: trade direction sign ($+1$ = client buy, $-1$ = client sell);
+\item $n_i$: number of option contracts in trade $i$;
+\item $\delta_i$: per-contract delta of the traded option, $\delta_i \in [-1, 1]$.
+\end{vardefs}
+
+The ES futures multiplier $M_h = 50$ is \emph{not} applied in
+Equation~\eqref{eq:arrival}: an ES option's delta is already expressed in ES futures
+contract equivalents, and $M_h$ enters only when converting futures price moves or
+execution costs into dollars.
+
+Because the hedge instrument is an ES \emph{future}, option deltas are computed with the
+Black-76 futures-option delta rather than the equity Black--Scholes delta. At bar $t_j$,
+
+\begin{eqbox}
+\begin{equation}
+\delta_i(t_j) =
+\begin{cases}
+N(d_{1,i}(t_j)), & \text{call},\\[2pt]
+N(d_{1,i}(t_j)) - 1, & \text{put},
+\end{cases}
+\qquad
+d_{1,i}(t_j) = \frac{\ln(F_j/K_i) + \tfrac{1}{2}\sigma^2 \tau_i(t_j)}{\sigma\sqrt{\tau_i(t_j)}}.
+\label{eq:delta}
+\end{equation}
+\end{eqbox}
+
+\begin{vardefs}
+\item $\delta_i(t_j)$: delta of option $i$ evaluated at bar $t_j$;
+\item $N(\cdot)$: standard normal cumulative distribution function;
+\item $F_j$: ES futures price at bar $t_j$;
+\item $K_i$: strike price of option $i$;
+\item $\tau_i(t_j)$: time to expiry of option $i$ at bar $t_j$, in years;
+\item $\sigma$: flat volatility input, the trading day's 1M BVOL.
+\end{vardefs}
+
+The $e^{-r\tau}$ discount factor of the fully discounted Black-76 delta is omitted; at
+intraday hedging horizons its effect on delta is negligible.
+
+\textbf{Continuous revaluation.} The book delta at bar $t_j$ is recomputed from scratch
+by repricing \emph{every} live option position at the current futures price,
+
+\begin{eqbox}
+\begin{equation}
+\Delta_{\text{book}}(t_j) = \sum_{i:\,t_i \le t_j} s_i \cdot n_i \cdot \delta_i(t_j),
+\qquad
+\Delta(t_j) = \Delta_{\text{book}}(t_j) + \Delta_{\text{hedge}}(t_j).
+\end{equation}
+\end{eqbox}
+
+\begin{vardefs}
+\item $\Delta_{\text{book}}(t_j)$: delta of all option positions accumulated up to bar
+  $t_j$, repriced at $F_j$;
+\item $t_i$: execution timestamp of option trade $i$ (the sum runs over all trades
+  executed at or before $t_j$);
+\item $\Delta_{\text{hedge}}(t_j)$: cumulative sum of executed hedge child orders up to
+  bar $t_j$;
+\item $\Delta(t_j)$: residual book delta after hedging --- the quantity the band in
+  Equation~\eqref{eq:trigger} monitors.
+\end{vardefs}
+
+\begin{whybox}
+\textbf{Why revaluation matters.} A cumulative sum of deltas frozen at each trade's own
+execution price only moves when new trades arrive. Repricing the live book each bar
+captures the gamma-driven drift of positions already on the book, which is a material
+share of intraday delta movement and is required to reproduce the continuously drifting
+zero-hedge delta path.
+\end{whybox}
+
+\subsection{Execution-Cost and Delta-Risk Measurement}
+
+Actual hedge fills are not available, so execution cost is estimated with a
+market-data-based proxy combining spread cost and an ADV-adjusted impact penalty:
+
+\begin{eqbox}
+\begin{equation}
+C_{\text{exec}} = \sum_k M_h \lvert q_k \rvert
+\left[ \frac{s}{2} + \alpha S_k \left( \frac{\lvert q_k \rvert}{ADV_k} \right)^{\!\beta} \right].
+\label{eq:cost}
+\end{equation}
+\end{eqbox}
+
+\begin{vardefs}
+\item $C_{\text{exec}}$: total execution cost in dollars, summed over all hedge child
+  orders $k$ (the forced end-of-day flattening trade included);
+\item $M_h = 50$: ES futures multiplier (dollars per index point per contract);
+\item $q_k$: signed child order size in ES contracts;
+\item $s/2$: half bid--ask spread in index points, proxied by half of one ES tick
+  ($0.125$), since intraday quotes are not in the 5-minute bar data and front-month ES
+  trades at the minimum tick spread almost continuously;
+\item $\alpha$: market-impact level parameter (base case $0.05$);
+\item $S_k$: ES futures price at the bar where child order $k$ executes;
+\item $ADV_k$: 20-day average daily ES futures volume, in contracts;
+\item $\beta$: market-impact curvature parameter (base case $0.5$); the ratio
+  $\lvert q_k \rvert / ADV_k$ is the dimensionless participation rate.
+\end{vardefs}
+
+Delta risk is measured from the realized residual-delta P\&L of the simulated hedge
+path:
+
+\begin{eqbox}
+\begin{equation}
+\ell^{\Delta}_{j+1} = M_h\,\Delta(t_j)\,(S_{j+1} - S_j),
+\qquad
+C_{\text{risk}} = \sqrt{ \frac{1}{M} \sum_{j=0}^{M-1} \left( \ell^{\Delta}_{j+1} \right)^{2} }.
+\end{equation}
+\end{eqbox}
+
+\begin{vardefs}
+\item $\ell^{\Delta}_{j+1}$: realized P\&L (dollars) from carrying residual delta
+  $\Delta(t_j)$ through the price move from bar $j$ to bar $j+1$;
+\item $S_j$: ES futures price at bar $t_j$;
+\item $M$: total number of 5-minute bars in the backtest;
+\item $C_{\text{risk}}$: delta risk, the root mean square of realized residual-delta
+  P\&L across all bars.
+\end{vardefs}
+
+\subsection{Benchmarks and Standardized Objective}
+
+Two benchmark policies bound the attainable cost--risk region
+(Table~\ref{tab:benchmarks}). \textbf{Zero Hedge} never rebalances intraday and flattens
+only at the close: it is the lower bound on execution cost and the upper bound on delta
+risk. \textbf{Full Hedge} re-flattens the book at every 5-minute bar --- offsetting both
+new arrivals and the gamma drift of existing positions --- and is the upper bound on cost
+with delta risk identically zero.
+
+\begin{table}[htbp]
+\centering
+\small
+\begin{tabular}{lll}
+\toprule
+\textbf{Benchmark} & \textbf{Description} & \textbf{Purpose} \\
+\midrule
+Zero Hedge & Flatten at close only & Cost floor, risk ceiling \\
+Full Hedge & Re-flatten every 5-minute bar & Risk floor, cost ceiling \\
+\bottomrule
+\end{tabular}
+\caption{Benchmark policies used for normalization.}
+\label{tab:benchmarks}
+\end{table}
+
+Each strategy configuration is scored by normalizing its cost against Full Hedge and its
+risk against Zero Hedge, so both terms are dimensionless and $O(1)$:
+
+\begin{eqbox}
+\begin{equation}
+\widetilde{C}_{\text{exec}}(\theta) = \frac{C_{\text{exec}}(\theta)}{C_{\text{exec}}(\text{Full Hedge})},
+\qquad
+\widetilde{C}_{\text{risk}}(\theta) = \frac{C_{\text{risk}}(\theta)}{C_{\text{risk}}(\text{Zero Hedge})},
+\end{equation}
+\end{eqbox}
+
+\begin{eqbox}
+\begin{equation}
+L_{\text{std}}(\theta) = \widetilde{C}_{\text{exec}}(\theta)
++ \lambda_{\text{risk}}\,\widetilde{C}_{\text{risk}}(\theta),
+\qquad
+\theta^{*} = \arg\min_{\theta \in \Theta} L_{\text{std}}(\theta).
+\end{equation}
+\end{eqbox}
+
+\begin{vardefs}
+\item $\theta = (H, \epsilon, T_{\text{cooldown}}, e, \tau)$: one strategy configuration
+  --- band width, breach buffer, cooldown, execution method ($e \in \{\text{TWAP},
+  \text{VWAP}\}$), and execution horizon;
+\item $\widetilde{C}_{\text{exec}}(\theta)$: execution cost of $\theta$ as a fraction of
+  Full Hedge's cost;
+\item $\widetilde{C}_{\text{risk}}(\theta)$: delta risk of $\theta$ as a fraction of
+  Zero Hedge's risk;
+\item $\lambda_{\text{risk}}$: weight on normalized delta risk (base case $1$, i.e.\
+  equal weight on cost and risk; swept as a sensitivity parameter);
+\item $L_{\text{std}}(\theta)$: standardized loss to be minimized;
+\item $\Theta$: the full parameter grid; $\theta^{*}$ is the selected configuration.
+\end{vardefs}
+
+\subsection{Experimental Design}
+
+\textbf{Data.} The backtest covers 102 trading days (January 2 -- May 29, 2026). Delta
+arrivals come from a simulated tape of 32{,}127 executed ES option trades calibrated to
+Databento ES option prints; market inputs are 8{,}364 five-minute ES futures bars with
+volume, 20-day ADV, 1M BVOL, and 1M SOFR OIS.
+
+\textbf{Empirical calibration of the band grid.} The band width $H$ is a parameter to be
+selected by backtesting, and its scale must match the book it polices. Under the unit
+convention of Equation~\eqref{eq:arrival}, the realized book delta has a median daily
+maximum of $\lvert \Delta \rvert \approx 85$ contracts (95th percentile $\approx 257$,
+maximum $609$). The band grid is therefore chosen to span this empirical range,
+
+\begin{eqbox}
+\begin{equation}
+H \in \{25,\ 50,\ 100,\ 200\} \ \text{ES contract equivalents},
+\end{equation}
+\end{eqbox}
+
+so that the narrowest band binds on most days and the widest binds only on tail days. As
+limiting cases, $H \to 0$ recovers Full Hedge and $H \to \infty$ recovers Zero Hedge.
+
+\begin{whybox}
+\textbf{Why not the illustrative grid.} Band values quoted in earlier drafts (e.g.\
+$H \in \{2{,}500,\dots,20{,}000\}$) sit one to two orders of magnitude above this book's
+realized delta scale; at that scale the band never triggers and every configuration
+collapses to Zero Hedge. Calibrating $H$ to the empirical delta distribution is what
+makes the grid search informative.
+\end{whybox}
+
+\textbf{Parameter grid.} The full strategy grid crosses every dimension of $\theta$
+(Table~\ref{tab:grid}), giving $4 \times 3 \times 3 \times 3 \times 2 = 216$
+configurations. Each is simulated over all 102 days with the same precomputed book-delta
+paths, so differences across configurations reflect the hedging rule alone.
+
+\begin{table}[htbp]
+\centering
+\small
+\setlength{\tabcolsep}{5pt}
+\begin{tabular}{llll}
+\toprule
+\textbf{Parameter} & \textbf{Role} & \textbf{Grid} & \textbf{Selection} \\
+\midrule
+$H$ & No-trade band width & $\{25, 50, 100, 200\}$ contracts & Grid search \\
+$\epsilon$ & Breach buffer & $\{0\%, 5\%, 10\%\}$ & Grid search \\
+$T_{\text{cooldown}}$ & Post-hedge cooldown & $\{0, 15, 30\}$ min & Grid search \\
+$\tau$ & Execution horizon & $\{15, 30, 60\}$ min & Grid search \\
+$e$ & Execution method & $\{\text{TWAP}, \text{VWAP}\}$ & Comparison \\
+\midrule
+$\alpha$ & Impact level & $0.05 \times \{0.5, 1, 2, 4\}$ & Sweep \\
+$s/2$ & Half-spread proxy & $0.125 \times \{0.5, 1, 2, 4\}$ pts & Sweep \\
+$\lambda_{\text{risk}}$ & Risk weight & $\{0.1, 0.25, 0.5, 1, 2, 5, 10\}$ & Sweep \\
+\bottomrule
+\end{tabular}
+\caption{Strategy parameters (top) and model-assumption parameters (bottom). $\beta$ is
+held at $0.5$: rescaling the impact exponent requires per-order participation rates that
+are not retained at the aggregate grain of the results.}
+\label{tab:grid}
+\end{table}
+
+\textbf{Evaluation.} Each configuration is placed in normalized (cost, risk) space
+against the two benchmarks, and the Pareto frontier of non-dominated configurations is
+traced. The selected strategy is $\theta^{*}$, the minimizer of
+$L_{\text{std}}$; its robustness is then checked under the $\alpha$, spread, and
+$\lambda_{\text{risk}}$ sweeps, and its behavior is illustrated with an intraday
+walk-through (book-delta path and cumulative delta P\&L) on the busiest simulated
+trading day.
+
+\end{document}
