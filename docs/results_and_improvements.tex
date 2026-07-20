@@ -19,8 +19,8 @@
 
 \section{Setup and Benchmarks}
 
-All results below come from the backtesting framework of notebooks
-\texttt{04\_alex\_implementation} and \texttt{05\_alex\_dynamic\_bands}: 102 trading days
+All results below come from the backtesting framework of notebooks 04
+(static bands) and 05 (dynamic bands): 102 trading days
 (January 2 -- May 29, 2026), 32{,}127 simulated ES option executions, book delta and
 gamma repriced with Black-76 at every 5-minute bar, TWAP/VWAP execution, the
 spread-plus-impact execution-cost proxy, and delta risk measured as the RMS of realized
@@ -80,9 +80,10 @@ The band is generalized to $H(t)$, with the static rule as the constant special 
 \begin{eqbox}
 \begin{equation}
 \lvert \Delta(t) \rvert > H(t)(1+\epsilon),
-\quad
+\end{equation}
+\begin{equation}
 H(t) = H_0 \underbrace{\sqrt{\tfrac{R(t)}{R(0)}}}_{\text{time decay}}
-\cdot \underbrace{\frac{1}{1 + c\,\lvert\Gamma(t)\rvert/\tilde{\Gamma}}}_{\text{gamma cond.}},
+\cdot \underbrace{\frac{1}{1 + c\,\lvert\Gamma(t)\rvert/\tilde{\Gamma}}}_{\text{gamma conditioning}},
 \end{equation}
 \end{eqbox}
 
