@@ -24,7 +24,11 @@ All results below come from the backtesting framework of notebooks 04
 (January 2 -- May 29, 2026), 32{,}127 simulated ES option executions, book delta and
 gamma repriced with Black-76 at every 5-minute bar, TWAP/VWAP execution, the
 spread-plus-impact execution-cost proxy, and delta risk measured as the RMS of realized
-residual-delta P\&L per bar. Configurations are scored by the standardized loss
+residual-delta P\&L per bar. The cost model incorporates two refinements from the
+\texttt{Timmy/strategy-comparison} branch: the impact level $\alpha = 0.055$ is anchored
+at $\approx 0.5$bp of notional impact for a 1-lot at median ES ADV, and any fill on the
+final bar -- in particular the forced end-of-day flatten -- is costed as a
+Market-On-Close auction execution (zero spread, impact scaled by $0.15$). Configurations are scored by the standardized loss
 \[
 L_{\text{std}} = \widetilde{C}_{\text{exec}} + \lambda\,\widetilde{C}_{\text{risk}},
 \qquad \lambda = 1,
@@ -38,8 +42,8 @@ normalizing cost by Full Hedge and risk by Zero Hedge.
 \toprule
 \textbf{Benchmark} & \textbf{Exec.\ cost} & \textbf{Risk (RMS/bar)} & $L_{\text{std}}$ \\
 \midrule
-Zero Hedge (flatten at close only) & \$1{,}473{,}208 & \$24{,}801 & 1.399 \\
-Full Hedge (re-flatten every bar)  & \$3{,}692{,}884 & \$0        & 1.000 \\
+Zero Hedge (flatten at close only) & \$235{,}240 & \$24{,}801 & 1.058 \\
+Full Hedge (re-flatten every bar)  & \$4{,}030{,}988 & \$0        & 1.000 \\
 \bottomrule
 \end{tabular}
 \caption{Benchmark bounds over the 102-day backtest.}
@@ -59,19 +63,23 @@ The grid search over $\theta = (H, \epsilon, T_{\text{cooldown}}, e, \tau)$ sele
 \toprule
 \textbf{Strategy} & \textbf{Exec.\ cost} & \textbf{Risk (RMS/bar)} & $L_{\text{std}}$ \\
 \midrule
-Static band $\theta^{*}$ & \$898{,}678 & \$8{,}620 & 0.591 \\
+Static band $\theta^{*}$ & \$835{,}014 & \$8{,}620 & 0.555 \\
 \bottomrule
 \end{tabular}
-\caption{Selected static-band strategy: $-39\%$ execution cost and $-65\%$ delta risk
-vs.\ Zero Hedge; $-76\%$ cost vs.\ Full Hedge (a saving of \$2.79M over the sample,
-$\approx$\$27{,}400 per day, in exchange for \$8{,}620 RMS/bar of residual delta risk).}
+\caption{Selected static-band strategy: $-65\%$ delta risk vs.\ Zero Hedge and
+$-79\%$ cost vs.\ Full Hedge (a saving of \$3.20M over the sample,
+$\approx$\$31{,}300 per day). Under the closing-auction refinement Zero Hedge's single
+cheap auction flatten makes it the cost floor by a wide margin, so the band's case
+rests on risk reduction and the combined objective, not on undercutting Zero Hedge's
+cost.}
 \end{table}
 
 \textbf{Robustness.} On five re-seeded trade tapes (per-day bootstrap re-drawing
-contract, side, and size), $H = 25$ with TWAP execution wins on every seed and the
-static band beats both benchmarks on every seed. The finer parameters
-($\epsilon$, cooldown, horizon) reshuffle with the draw and should be treated as
-second-order.
+contract, side, and size), the selected strategy beats both benchmarks on the
+standardized objective on every seed. $H = 25$ with TWAP wins four of five seeds; one
+seed prefers a wide $H = 100$ band -- consistent with the cheap auction close narrowing
+the gap between tight and wide bands. The finer parameters ($\epsilon$, cooldown,
+horizon) reshuffle with the draw and should be treated as second-order.
 
 \section{Dynamic Band Results}
 
@@ -98,17 +106,22 @@ speed $d\Delta \approx \Gamma\,dS$ (proposal Eq.~32).
 $L_{\text{std}}$ by $\approx 11\%$ over static -- but dynamic bands are narrower
 \emph{on average}, and under this cost proxy tighter is almost monotonically better:
 extending the static grid downward, an ultra-tight \emph{static} band ($H_0 = 2$,
-$L_{\text{std}} = 0.513$) beats every dynamic configuration under full-flatten
+$L_{\text{std}} = 0.495$) beats every dynamic configuration under full-flatten
 targeting. Naive comparisons at matched $H_0$ conflate band \emph{timing} with band
 \emph{tightness}.
 \end{whybox}
 
 \textbf{Width-matched comparison.} Setting a static band to each dynamic
 configuration's mean effective width (same horizon, method, $\epsilon$, cooldown)
-isolates the timing information. The dynamic edge is real but depends on the width
-regime: roughly 2--3\% of the standardized loss at $H_0 = 25$, up to about 6\% at wider
-bands, and vanishing as bands tighten. It is positive for every dynamic form on every re-seeded
-tape, with the combined form best, then gamma, then time-decay.
+isolates the timing information, and under the closing-auction cost model it
+\emph{splits} the two mechanisms. Gamma conditioning keeps a genuine edge -- roughly
+2.5--4.5\% of the standardized loss at moderate widths, positive on every re-seeded
+tape -- because its rationale (delta diffuses through the band faster when gamma is
+high) does not depend on how the close is costed. The time-decay band's edge turns
+\emph{negative}: its derivation leaned on the end-of-day flatten being expensive, and
+the auction discount removes exactly that penalty, so shrinking the band into the close
+pre-pays execution for nothing. The combined form inherits a diluted positive edge from
+its gamma component.
 
 \section{Band-Edge Targeting}
 
@@ -131,21 +144,22 @@ Results (TWAP 60min, $L_{\text{std}}$ change vs.\ full flatten):
 \toprule
 $H_0$ & 5 & 10 & 25 & 50 & 100 \\
 \midrule
-Static band        & $+2.4\%$ & $+4.8\%$ & $+3.4\%$ & $-2.5\%$ & $-15.9\%$ \\
-Combined dynamic   & $+0.3\%$ & $+0.7\%$ & $+1.0\%$ & $+1.3\%$ & $+2.5\%$  \\
+Static band        & $+2.6\%$ & $+5.4\%$ & $+6.0\%$ & $+1.5\%$ & $-9.4\%$ \\
+Combined dynamic   & $+0.3\%$ & $+0.8\%$ & $+1.2\%$ & $+1.5\%$ & $+3.0\%$  \\
 \bottomrule
 \end{tabular}
 \caption{Improvement from edge targeting. Positive = better than full flatten.}
 \end{table}
 
-Edge targeting helps at tight-to-moderate widths but \emph{backfires} for wide static
-bands: parking $\lvert\Delta\rvert$ at a wide edge all day is too risky under
-$\lambda = 1$. The combined dynamic band removes exactly that failure mode -- its
-shrinking width pulls the parked delta inward through the afternoon -- making edge
-targeting uniformly positive and robust across re-seeded tapes. The best overall
-configuration becomes \textbf{combined dynamic band + edge targeting}
-($H_0 = 5$, $c = 2$: $L_{\text{std}} = 0.508$ vs.\ $0.513$ for the best full-flatten
-configuration).
+Edge targeting is now the strongest single refinement: under the closing-auction cost
+model, parking residual delta at the band edge and carrying it to a cheap auction close
+is exactly the right trade, worth up to $+6\%$ of standardized loss at moderate static
+widths. It still backfires for wide static bands (too much risk parked at the edge
+under $\lambda = 1$), a failure mode the combined dynamic band removes -- its shrinking
+width pulls the parked delta inward through the afternoon -- keeping the stack uniformly
+positive across re-seeded tapes. The best overall configuration is
+\textbf{combined dynamic band + edge targeting} ($H_0 = 5$, $c = 2$:
+$L_{\text{std}} = 0.491$ vs.\ $0.495$ for the best full-flatten configuration).
 
 \section{Cost-Model Discussion}
 
