@@ -1,0 +1,190 @@
+\documentclass[11pt]{article}
+
+\usepackage{amsmath}
+\usepackage{booktabs}
+\usepackage[most]{tcolorbox}
+
+\newtcolorbox{eqbox}{colback=blue!6!white, colframe=blue!45!black,
+  boxrule=0.8pt, sharp corners, left=2pt, right=2pt, top=2pt, bottom=2pt}
+\newtcolorbox{whybox}{colback=black!4!white, colframe=black!4!white,
+  borderline west={2pt}{0pt}{black!30}, sharp corners,
+  left=6pt, right=6pt, top=4pt, bottom=4pt}
+
+\title{Intraday Delta Hedging: Backtest Results and Possible Improvements}
+\author{Alex Marthan}
+\date{July 2026}
+
+\begin{document}
+\maketitle
+
+\section{Setup and Benchmarks}
+
+All results below come from the backtesting framework of notebooks
+\texttt{04\_alex\_implementation} and \texttt{05\_alex\_dynamic\_bands}: 102 trading days
+(January 2 -- May 29, 2026), 32{,}127 simulated ES option executions, book delta and
+gamma repriced with Black-76 at every 5-minute bar, TWAP/VWAP execution, the
+spread-plus-impact execution-cost proxy, and delta risk measured as the RMS of realized
+residual-delta P\&L per bar. Configurations are scored by the standardized loss
+$L_{\text{std}} = \widetilde{C}_{\text{exec}} + \lambda\,\widetilde{C}_{\text{risk}}$
+with $\lambda = 1$, normalizing cost by Full Hedge and risk by Zero Hedge.
+
+\begin{table}[htbp]
+\centering
+\small
+\begin{tabular}{lrrr}
+\toprule
+\textbf{Benchmark} & \textbf{Exec.\ cost} & \textbf{Risk (RMS/bar)} & $L_{\text{std}}$ \\
+\midrule
+Zero Hedge (flatten at close only) & \$1{,}473{,}208 & \$24{,}801 & 1.399 \\
+Full Hedge (re-flatten every bar)  & \$3{,}692{,}884 & \$0        & 1.000 \\
+\bottomrule
+\end{tabular}
+\caption{Benchmark bounds over the 102-day backtest.}
+\end{table}
+
+\section{Static Band Results}
+
+The grid search over $\theta = (H, \epsilon, T_{\text{cooldown}}, e, \tau)$ selects
+$\theta^{*} = (H{=}25,\ \epsilon{=}10\%,\ T_{\text{cooldown}}{=}0,\ \text{TWAP},\ 60\text{min})$:
+
+\begin{table}[htbp]
+\centering
+\small
+\begin{tabular}{lrrr}
+\toprule
+\textbf{Strategy} & \textbf{Exec.\ cost} & \textbf{Risk (RMS/bar)} & $L_{\text{std}}$ \\
+\midrule
+Static band $\theta^{*}$ & \$898{,}678 & \$8{,}620 & 0.591 \\
+\bottomrule
+\end{tabular}
+\caption{Selected static-band strategy: $-39\%$ execution cost and $-65\%$ delta risk
+vs.\ Zero Hedge; $-76\%$ cost vs.\ Full Hedge (a saving of \$2.79M over the sample,
+$\approx$\$27{,}400 per day, in exchange for \$8{,}620 RMS/bar of residual delta risk).}
+\end{table}
+
+\textbf{Robustness.} On five re-seeded trade tapes (per-day bootstrap re-drawing
+contract, side, and size), $H = 25$ with TWAP execution wins on every seed and the
+static band beats both benchmarks on every seed. The finer parameters
+($\epsilon$, cooldown, horizon) reshuffle with the draw and should be treated as
+second-order.
+
+\section{Dynamic Band Results}
+
+The band is generalized to $H(t)$, with the static rule as the constant special case:
+
+\begin{eqbox}
+\begin{equation}
+\lvert \Delta(t) \rvert > H(t)(1+\epsilon),
+\qquad
+H(t) = H_0 \underbrace{\sqrt{\frac{R(t)}{R(0)}}}_{\text{time decay}}
+\cdot \underbrace{\frac{1}{1 + c\,\lvert\Gamma(t)\rvert/\tilde{\Gamma}}}_{\text{gamma conditioning}},
+\end{equation}
+\end{eqbox}
+
+where $R(t)$ is the number of bars remaining in the session, $\Gamma(t)$ the book gamma
+repriced each bar, and $\tilde{\Gamma}$ its sample median. The time-decay factor comes
+from the two-sided-flow argument (future arrivals can offset a delta of scale
+$\sqrt{R(t)}$ for free); the gamma factor from delta diffusing through the band at
+speed $d\Delta \approx \Gamma\,dS$ (proposal Eq.~32).
+
+\begin{whybox}
+\textbf{The width trap.} At matched $H_0 = 25$ the combined dynamic band improves
+$L_{\text{std}}$ by $\approx 11\%$ over static -- but dynamic bands are narrower
+\emph{on average}, and under this cost proxy tighter is almost monotonically better:
+extending the static grid downward, an ultra-tight \emph{static} band ($H_0 = 2$,
+$L_{\text{std}} = 0.513$) beats every dynamic configuration under full-flatten
+targeting. Naive comparisons at matched $H_0$ conflate band \emph{timing} with band
+\emph{tightness}.
+\end{whybox}
+
+\textbf{Width-matched comparison.} Setting a static band to each dynamic
+configuration's mean effective width (same horizon, method, $\epsilon$, cooldown)
+isolates the timing information. The dynamic edge is real but width-dependent:
+$2.0$--$2.9\%$ of $L_{\text{std}}$ at $H_0 = 25$, up to $\approx 6\%$ at wider bands,
+vanishing as bands tighten. It is positive for every dynamic form on every re-seeded
+tape, ordered combined $>$ gamma $>$ time-decay.
+
+\section{Band-Edge Targeting}
+
+Replacing the full flatten $Q_t = -\Delta(t)$ with the Whalley--Wilmott-style
+edge target
+
+\begin{eqbox}
+\begin{equation}
+Q_t = -\,\mathrm{sign}(\Delta(t))\,\big(\lvert\Delta(t)\rvert - H(t)\big)
+\end{equation}
+\end{eqbox}
+
+trades only the excess over the band and leaves the residual parked at the edge.
+Results (TWAP 60min, $L_{\text{std}}$ change vs.\ full flatten):
+
+\begin{table}[htbp]
+\centering
+\small
+\begin{tabular}{lrrrrr}
+\toprule
+$H_0$ & 5 & 10 & 25 & 50 & 100 \\
+\midrule
+Static band        & $+2.4\%$ & $+4.8\%$ & $+3.4\%$ & $-2.5\%$ & $-15.9\%$ \\
+Combined dynamic   & $+0.3\%$ & $+0.7\%$ & $+1.0\%$ & $+1.3\%$ & $+2.5\%$  \\
+\bottomrule
+\end{tabular}
+\caption{Improvement from edge targeting. Positive = better than full flatten.}
+\end{table}
+
+Edge targeting helps at tight-to-moderate widths but \emph{backfires} for wide static
+bands: parking $\lvert\Delta\rvert$ at a wide edge all day is too risky under
+$\lambda = 1$. The combined dynamic band removes exactly that failure mode -- its
+shrinking width pulls the parked delta inward through the afternoon -- making edge
+targeting uniformly positive and robust across re-seeded tapes. The best overall
+configuration becomes \textbf{combined dynamic band + edge targeting}
+($H_0 = 5$, $c = 2$: $L_{\text{std}} = 0.508$ vs.\ $0.513$ for the best full-flatten
+configuration).
+
+\section{Cost-Model Discussion}
+
+The execution-cost proxy contains two components, both \emph{size-proportional}:
+spread cost (linear in order size; half a tick per contract) and ADV-adjusted impact
+cost (superlinear, $\propto \lvert q\rvert^{1.5}$). Because both vanish as orders
+shrink, splitting a hedge into arbitrarily many small child orders is costless in the
+model, which is why ultra-tight bands (thousands of small triggers per sample) appear
+almost monotonically better. What the model \emph{lacks} is a \emph{fixed per-ticket
+cost} -- a charge per order independent of size (exchange/clearing minimums, broker
+ticket fees, operational overhead). Any positive per-ticket cost penalizes
+high-frequency triggering, shifts the optimal band width to an interior value, and
+makes the band-design comparisons more decision-relevant. The very tight end of all
+results above should therefore be read as a model artifact, not a trading
+recommendation; the moderate-width regime is the operationally relevant one, and it is
+exactly where the dynamic-band and edge-targeting refinements earn their keep.
+
+\section{Possible Improvements}
+
+\begin{enumerate}
+\item \textbf{Fixed per-ticket cost.} Add $C_{\text{ticket}}$ per child order to the
+  cost proxy. Restores an interior optimal band width and is expected to increase the
+  relative value of dynamic bands and edge targeting. Highest priority.
+\item \textbf{Urgency-aware execution horizon.} Make $\tau(t) = \min(\tau_0, R(t))$
+  explicit (or decay $\tau$ with the same $\sqrt{R/R_0}$ factor as the band), so
+  late-day hedges execute faster instead of being silently truncated by the close.
+\item \textbf{Volatility-conditioned band.} The gamma factor captures how fast the
+  book's delta moves per index point; a realized-volatility factor
+  $1/(1 + c_\sigma\,\hat\sigma(t)/\tilde\sigma)$ would capture how many points the
+  market is moving. Same plumbing as the gamma band.
+\item \textbf{Derive the optimal band.} Solve a small dynamic program for $H^{*}(t)$
+  under a simplified arrival model calibrated to the tape, and benchmark the heuristic
+  $\sqrt{R}$ and gamma forms against it.
+\item \textbf{Historical VWAP weights.} Current VWAP uses same-day realized volumes
+  (mild look-ahead); switching to a trailing 20-day time-of-day volume profile makes it
+  implementable. TWAP's observed advantage would, if anything, grow.
+\item \textbf{Calibrate $\alpha$ from TCA data.} The impact level is a sensitivity
+  parameter, not a calibrated one; conclusions were checked across $\alpha \times
+  \{0.5,\dots,4\}$, but real fill data would pin the dollar magnitudes.
+\item \textbf{Out-of-sample validation.} Select parameters on the first $\sim$70 days
+  and evaluate frozen on the remainder, quantifying the winner's-curse gap directly.
+\item \textbf{Real flow structure.} The simulated tape draws sides i.i.d.\ 50/50, so
+  arrivals contain no predictable structure beyond the $\sqrt{R}$ effect; real client
+  flow is clustered and autocorrelated, which should increase the value of
+  flow-conditioned (arrival-aware) bands and execution.
+\end{enumerate}
+
+\end{document}
