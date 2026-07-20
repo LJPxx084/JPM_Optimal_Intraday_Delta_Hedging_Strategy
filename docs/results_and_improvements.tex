@@ -25,8 +25,11 @@ All results below come from the backtesting framework of notebooks
 gamma repriced with Black-76 at every 5-minute bar, TWAP/VWAP execution, the
 spread-plus-impact execution-cost proxy, and delta risk measured as the RMS of realized
 residual-delta P\&L per bar. Configurations are scored by the standardized loss
-$L_{\text{std}} = \widetilde{C}_{\text{exec}} + \lambda\,\widetilde{C}_{\text{risk}}$
-with $\lambda = 1$, normalizing cost by Full Hedge and risk by Zero Hedge.
+\[
+L_{\text{std}} = \widetilde{C}_{\text{exec}} + \lambda\,\widetilde{C}_{\text{risk}},
+\qquad \lambda = 1,
+\]
+normalizing cost by Full Hedge and risk by Zero Hedge.
 
 \begin{table}[htbp]
 \centering
@@ -45,7 +48,9 @@ Full Hedge (re-flatten every bar)  & \$3{,}692{,}884 & \$0        & 1.000 \\
 \section{Static Band Results}
 
 The grid search over $\theta = (H, \epsilon, T_{\text{cooldown}}, e, \tau)$ selects
-$\theta^{*} = (H{=}25,\ \epsilon{=}10\%,\ T_{\text{cooldown}}{=}0,\ \text{TWAP},\ 60\text{min})$:
+\[
+\theta^{*} = (H{=}25,\ \epsilon{=}10\%,\ T_{\text{cooldown}}{=}0,\ \text{TWAP},\ 60\,\text{min}):
+\]
 
 \begin{table}[htbp]
 \centering
@@ -75,9 +80,9 @@ The band is generalized to $H(t)$, with the static rule as the constant special 
 \begin{eqbox}
 \begin{equation}
 \lvert \Delta(t) \rvert > H(t)(1+\epsilon),
-\qquad
-H(t) = H_0 \underbrace{\sqrt{\frac{R(t)}{R(0)}}}_{\text{time decay}}
-\cdot \underbrace{\frac{1}{1 + c\,\lvert\Gamma(t)\rvert/\tilde{\Gamma}}}_{\text{gamma conditioning}},
+\quad
+H(t) = H_0 \underbrace{\sqrt{\tfrac{R(t)}{R(0)}}}_{\text{time decay}}
+\cdot \underbrace{\frac{1}{1 + c\,\lvert\Gamma(t)\rvert/\tilde{\Gamma}}}_{\text{gamma cond.}},
 \end{equation}
 \end{eqbox}
 
