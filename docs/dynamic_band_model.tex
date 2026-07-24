@@ -1,0 +1,566 @@
+\documentclass{article}
+
+\usepackage{amsmath}
+\usepackage{booktabs}
+\usepackage{enumitem}
+\usepackage[most]{tcolorbox}
+
+\newtcolorbox{eqbox}{colback=blue!6!white, colframe=blue!45!black,
+  boxrule=0.8pt, sharp corners, left=2pt, right=2pt, top=2pt, bottom=2pt}
+\newtcolorbox{whybox}{colback=black!4!white, colframe=black!4!white,
+  borderline west={2pt}{0pt}{black!30}, sharp corners,
+  left=6pt, right=6pt, top=4pt, bottom=4pt}
+
+% Compact variable-definition list placed under each equation
+\newlist{vardefs}{itemize}{1}
+\setlist[vardefs]{label=--, nosep, leftmargin=1.6em, topsep=2pt}
+
+\title{Dynamic No-Trade Bands for Intraday Delta Hedging}
+\author{Alex Marthan}
+\date{July 2026}
+
+\begin{document}
+\maketitle
+
+\section{Model Framework}
+
+\subsection{From a Static Band to a State-Dependent Band}
+
+The static strategy holds a constant no-trade band $H$ around
+$\Delta_{\text{target}} = 0$ and hedges only when $\lvert\Delta(t)\rvert$ clears it. A
+constant $H$ encodes a constant answer to the question the band actually poses: \emph{how
+much residual delta is worth carrying rather than paying to remove?} That answer is not
+constant. The cost of carrying delta over the next interval depends on how fast the book
+regenerates delta once hedged, and that speed is a measurable state variable.
+
+The dynamic model therefore replaces the constant with a per-bar band:
+
+\begin{eqbox}
+\begin{equation}
+-H(t) \le \Delta(t) \le H(t),
+\qquad
+\lvert \Delta(t) \rvert > H(t)\,(1+\epsilon)
+\ \Rightarrow\ \text{hedge}.
+\label{eq:dyntrigger}
+\end{equation}
+\end{eqbox}
+
+Everything else in the strategy --- execution scheduling, cooldown, cost and risk
+measurement, benchmarks --- is unchanged. The static rule is the special case
+$H(t) \equiv H_0$, so the dynamic model strictly nests it and any improvement must be
+earned.
+
+\subsection{The Gamma-Conditioned Band}
+
+Between trade arrivals the book's delta does not sit still: it drifts with the underlying
+at a rate set by the book's convexity, $d\Delta \approx \Gamma\,dS$. Gamma is thus the
+\emph{speed} at which market moves regenerate delta after a hedge. For a band of
+half-width $H$ and per-bar underlying moves of scale $\sigma_S$, the expected number of
+bars for gamma drift alone to carry delta across the band is of order
+
+\[
+\left( \frac{H}{\lvert\Gamma\rvert\,\sigma_S} \right)^{2}.
+\]
+
+A high-gamma book traverses a fixed band quickly and therefore carries more unhedged risk
+between checks; a low-gamma book barely moves and the same band is needlessly tight.
+Making the band shrink as gamma rises equalizes this breach behaviour across regimes:
+
+\begin{eqbox}
+\begin{equation}
+H(t) = \frac{H_0}{1 + c\,\lvert \Gamma(t) \rvert}.
+\label{eq:gammaband}
+\end{equation}
+\end{eqbox}
+
+\begin{vardefs}
+\item $H_0$: base band half-width, in hedge-instrument units --- the band the rule uses
+  when the book is gamma-flat;
+\item $\Gamma(t)$: book gamma at bar $t$, in hedge-instrument units per unit move of the
+  underlying;
+\item $c$: tilt strength, controlling how hard the band responds to gamma.
+\end{vardefs}
+
+\textbf{Units of $c$.} Gamma enters undivided, so $c$ is \emph{not} dimensionless: it
+carries the reciprocal units of $\Gamma$, and the band halves exactly when
+$\lvert\Gamma\rvert = 1/c$. The useful range of $c$ is therefore set by the book's own
+gamma scale and differs by orders of magnitude across instruments
+(Table~\ref{tab:instrument}). Dividing $\lvert\Gamma\rvert$ by its sample median and
+rescaling $c$ gives the identical family of bands with a dimensionless $c$; only the
+units of the parameter change, not the model.
+
+\textbf{Limiting cases.} $c \to 0$ recovers the static band $H(t) \equiv H_0$; large $c$
+drives $H(t) \to 0$ whenever the book carries gamma, approaching continuous rehedging.
+The backtest selects $c$, so the data decides how hard to tilt.
+
+\begin{whybox}
+\textbf{The sign of the effect is not obvious.} Classical optimal-hedging asymptotics
+under proportional transaction costs (Whalley--Wilmott; Zakamouline) give an optimal
+half-width $\propto \Gamma^{2/3}$ --- i.e.\ \emph{wider} when gamma is high, on the
+grounds that chasing a fast-moving delta churns execution costs. Equation~\eqref{eq:gammaband}
+tilts the other way, prioritising risk control over turnover. Which effect dominates
+depends on the cost model and the risk measure, so $c$ is gridded and $c \to 0$ recovers
+the static band: the comparison is decided empirically, not assumed.
+\end{whybox}
+
+\subsection{Book Gamma Revaluation}
+
+The band in Equation~\eqref{eq:gammaband} requires $\Gamma(t)$ at every bar. It is built
+exactly like the book delta, by repricing every live position at the current underlying
+price and aggregating:
+
+\begin{eqbox}
+\begin{equation}
+\Gamma(t_j) = \sum_{i:\,t_i \le t_j} s_i \, n_i \, \gamma_i(t_j) \, m,
+\qquad
+\gamma_i(t_j) = \frac{\varphi\!\left(d_{1,i}(t_j)\right)}
+                     {S_j\,\sigma\,\sqrt{\tau_i(t_j)}}.
+\label{eq:gamma}
+\end{equation}
+\end{eqbox}
+
+\begin{vardefs}
+\item $\gamma_i(t_j)$: per-contract gamma of option $i$ at bar $t_j$ (identical for calls
+  and puts);
+\item $\varphi(\cdot)$: standard normal density; $d_{1,i}$ is as in the delta definition;
+\item $S_j$: underlying price at bar $t_j$ (futures price $F_j$ for ES);
+\item $m$: contract-to-hedge-unit multiplier ($m = 1$ for ES options, whose deltas are
+  already in futures equivalents; $m = 100$ for equity options, which deliver 100 shares);
+\item $s_i, n_i, \sigma, \tau_i$: as in the delta definition --- trade sign, contract
+  count, the day's flat volatility input, and time to expiry.
+\end{vardefs}
+
+\textbf{Gamma is strategy-independent.} The hedge instrument --- a future or the stock
+itself --- has zero gamma, so hedging changes $\Delta$ but never $\Gamma$. The path
+$\Gamma(t)$ therefore depends only on the option tape and the price path, not on the
+hedging rule, and is precomputed once per day and reused by every configuration in the
+grid. This is what makes the dynamic grid search no more expensive than the static one.
+
+\subsection{Instrument Instantiation}
+
+The framework above is instrument-agnostic; only the units and the gamma scale change.
+
+\begin{table}[htbp]
+\centering
+\small
+\begin{tabular}{lll}
+\toprule
+ & \textbf{ES futures} & \textbf{SPCX equity} \\
+\midrule
+Hedge instrument      & ES future            & The stock \\
+Delta / band unit     & Contract equivalents & Shares \\
+Contract multiplier $m$ & $1$                & $100$ \\
+P\&L multiplier $M_h$ & $50$ \$/point        & $1$ \$/share \\
+Option delta model    & Black-76 (futures)   & Black--Scholes (spot) \\
+$\Gamma$ units        & contracts/point      & shares/\$ \\
+Median $\lvert\Gamma\rvert$ & $0.0928$       & $2{,}176$ \\
+$c$ units             & points/contract      & \$/share \\
+$c$ grid              & $\{5, 10, 20\}$      & $\{2,5,10,20\}\times10^{-4}$ \\
+\bottomrule
+\end{tabular}
+\caption{Instantiation of the dynamic band model on the two books. The $c$ grids are
+\emph{not} interchangeable: each is scaled to its own book's gamma so that
+$c\,\lvert\Gamma\rvert$ spans roughly $0.5$--$2$.}
+\label{tab:instrument}
+\end{table}
+
+\section{Strategy and Experimental Design}
+
+This section states the experimental protocol shared by both books. Only the parameter
+\emph{values} in Table~\ref{tab:grid} differ between them.
+
+\subsection{Trigger Rule and Hedge Sizing}
+
+The band is monitored on a 5-minute grid. A hedge fires when
+Equation~\eqref{eq:dyntrigger} is satisfied, and the parent order returns the book to
+flat:
+
+\begin{eqbox}
+\begin{equation}
+\begin{aligned}
+Q_t &= -\Delta(t) && \text{(full flatten)},\\[2pt]
+Q_t &= -\,\mathrm{sign}(\Delta(t))\,\big(\lvert\Delta(t)\rvert - H(t)\big)
+     && \text{(edge target)}.
+\end{aligned}
+\label{eq:sizing}
+\end{equation}
+\end{eqbox}
+
+The edge-target variant trades only the excess over the band and leaves the residual
+parked at the edge; it is evaluated as a refinement in both results sections. After a
+schedule completes the trigger is suppressed for $T_{\text{cooldown}}$ unless the breach
+is large ($\lvert\Delta(t)\rvert > 2H(t)$, with the override threshold scaling with the
+\emph{current} band). Any residual delta is forcibly flattened at the close, so every
+configuration satisfies $\Delta(T) = 0$.
+
+\subsection{Execution}
+
+The parent order is split into child orders over a horizon $\tau$, i.e.\ over
+$N = \tau/5\,\text{min}$ consecutive bars, either equally weighted (TWAP) or weighted by
+each bar's share of traded volume (VWAP). A new trigger cancels and replaces any running
+schedule, resized to the current residual delta.
+
+\subsection{Cost and Risk Measurement}
+
+Execution cost is a market-data proxy combining a half-spread term and a concave impact
+term:
+
+\begin{eqbox}
+\begin{equation}
+C_{\text{exec}} = \sum_k M_h \lvert q_k \rvert
+\left[ \frac{s}{2} + \alpha\,S_k \left( \frac{\lvert q_k \rvert}{L_k} \right)^{\!\beta} \right],
+\qquad \beta = 0.5 .
+\label{eq:cost}
+\end{equation}
+\end{eqbox}
+
+\begin{vardefs}
+\item $q_k$: signed child order in bar $k$; $S_k$ the underlying price there;
+\item $s/2$: half bid--ask spread in price units;
+\item $\alpha$: impact level; $L_k$ the liquidity the fill leans on.
+\end{vardefs}
+
+\textbf{$\alpha$ and $L_k$ are the one place the two books genuinely diverge}, and the
+divergence is deliberate rather than a porting artifact. On ES, $\alpha$ is anchored so a
+1-lot pays $\approx0.5$bp of notional at median ADV, and $L_k$ is full-day ADV --- both
+harmless for an instrument whose hedge clips are $\sim\!10^{-4}$ of ADV. Neither survives
+on SPCX, where clips run to tens of percent of ADV: there $\alpha = Y\sigma_{\text{daily}}$
+follows the square-root law of impact (Toth--Bouchaud, $Y = 0.5$), anchoring impact to the
+book's own volatility, and $L_k$ is the liquidity of the fill's \emph{execution window}
+($\text{ADV}\times 5/390$ for an intraday child) rather than the whole day. Both books
+treat the final bar as an auction cross: zero spread, full-day depth, and an impact
+haircut.
+
+Delta risk is the root mean square of realized residual-delta P\&L per bar:
+
+\begin{eqbox}
+\begin{equation}
+\ell^{\Delta}_{j+1} = M_h\,\Delta(t_j)\,(S_{j+1} - S_j),
+\qquad
+C_{\text{risk}} = \sqrt{ \frac{1}{M} \sum_{j=0}^{M-1} \big(\ell^{\Delta}_{j+1}\big)^{2} }.
+\end{equation}
+\end{eqbox}
+
+\subsection{Benchmarks and Standardized Objective}
+
+\textbf{Zero Hedge} carries the book all day and flattens once into the close (cost floor,
+risk ceiling); \textbf{Full Hedge} re-flattens every bar (risk floor, cost ceiling). Both
+bound the attainable region and normalize the objective:
+
+\begin{eqbox}
+\begin{equation}
+L_{\text{std}}(\theta) =
+\frac{C_{\text{exec}}(\theta)}{C_{\text{exec}}(\text{Full Hedge})}
++ \lambda_{\text{risk}}\,
+\frac{C_{\text{risk}}(\theta)}{C_{\text{risk}}(\text{Zero Hedge})},
+\qquad \lambda_{\text{risk}} = 1 .
+\end{equation}
+\end{eqbox}
+
+\subsection{Fair-Comparison Methodology}
+
+Two protocol choices carry most of the inferential weight, because the naive comparison
+is misleading.
+
+\textbf{Width matching.} At the same $H_0$ the gamma band is \emph{narrower on average}
+than the static band, since the divisor in Equation~\eqref{eq:gammaband} is $\ge 1$. A
+comparison at matched $H_0$ therefore conflates two different things: the value of
+\emph{conditioning the band on gamma} and the value of simply running a \emph{tighter}
+band. Every headline dynamic-vs-static claim below is instead made against a static band
+set to the gamma configuration's \emph{mean effective width}, under identical
+$\epsilon$, cooldown, horizon and method.
+
+\textbf{Hedge-frequency capping.} The cost proxy in Equation~\eqref{eq:cost} contains no
+fixed per-ticket charge, and impact is concave in clip size, so splitting a hedge into
+more, smaller child orders is strictly cheaper in the model with no floor. Unconstrained
+grid search consequently runs away toward the tightest band available --- a boundary
+solution, not a strategy. Capping the average number of hedges per day stands in for the
+missing per-ticket cost and restores an interior, decision-relevant optimum.
+
+\subsection{Parameter Grid}
+
+\begin{table}[htbp]
+\centering
+\footnotesize
+\setlength{\tabcolsep}{4pt}
+\begin{tabular}{llll}
+\toprule
+\textbf{Parameter} & \textbf{Role} & \textbf{ES grid} & \textbf{SPCX grid} \\
+\midrule
+$H_0$ & Band width & $\{2,5,10,25,50,100,200\}$ ct & $\{5,10,25,50,100,200,300\}$k sh \\
+$c$   & Gamma tilt & $\{5, 10, 20\}$               & $\{2,5,10,20\}\times10^{-4}$ \\
+$\tau$ & Horizon   & \multicolumn{2}{l}{$\{15, 30, 60\}$ min} \\
+$e$   & Method     & \multicolumn{2}{l}{$\{\text{TWAP}, \text{VWAP}\}$} \\
+$\epsilon$ & Buffer & \multicolumn{2}{l}{$5\%$ (held fixed)} \\
+$T_{\text{cooldown}}$ & Cooldown & \multicolumn{2}{l}{$15$ min (held fixed)} \\
+\midrule
+$\lambda_{\text{risk}}$ & Risk weight & \multicolumn{2}{l}{$\{0.25, 0.5, 1, 2, 4\}$ (sweep)} \\
+\bottomrule
+\end{tabular}
+\caption{Strategy grid. $\epsilon$ and $T_{\text{cooldown}}$ are held fixed across all
+configurations so that the static-versus-dynamic comparison is not confounded by the
+second-order trigger refinements.}
+\label{tab:grid}
+\end{table}
+
+Each configuration is simulated over every day in the sample using the same precomputed
+delta and gamma paths, so differences across configurations reflect the hedging rule
+alone.
+
+\section{Results: ES Futures}
+
+\textbf{Data.} 102 trading days (January 2 -- May 29, 2026), a simulated tape of
+32{,}127 executed ES option trades, and 8{,}364 five-minute futures bars. Cost model:
+$\alpha = 0.055$, half-spread $0.125$ points, closing-auction impact factor $0.15$,
+$M_h = 50$.
+
+\begin{table}[htbp]
+\centering
+\small
+\begin{tabular}{lrrr}
+\toprule
+\textbf{Benchmark} & \textbf{Exec.\ cost} & \textbf{Risk (RMS/bar)} & $L_{\text{std}}$ \\
+\midrule
+Zero Hedge & \$235{,}240   & \$24{,}801 & 1.058 \\
+Full Hedge & \$4{,}030{,}988 & \$0      & 1.000 \\
+\bottomrule
+\end{tabular}
+\caption{ES benchmark bounds over 102 days.}
+\end{table}
+
+\textbf{Gamma signal.} Book gamma has a median of $0.0928$ contracts/point (90th/99th
+percentiles $0.368$ / $0.999$). Within a day $\lvert\Gamma\rvert$ has a coefficient of
+variation of $0.61$ and a max/median ratio of $2.1\times$; across bars it correlates with
+$\lvert\Delta\rvert$ at $\rho = 0.63$. Gamma is thus a strongly varying but only
+partially independent signal on this book.
+
+\begin{table}[htbp]
+\centering
+\small
+\begin{tabular}{lrrrrr}
+\toprule
+\textbf{Family} & $H_0$ & $c$ & \textbf{Exec.\ cost} & \textbf{Risk} & $L_{\text{std}}$ \\
+\midrule
+Static      & 2  & ---  & \$974{,}803 & \$6{,}270 & 0.4946 \\
+Combined    & 10 & 20   & \$653{,}688 & \$8{,}309 & 0.4972 \\
+Gamma       & 10 & 20   & \$668{,}157 & \$8{,}320 & 0.5012 \\
+Time-decay  & 10 & ---  & \$721{,}897 & \$8{,}331 & 0.5150 \\
+\bottomrule
+\end{tabular}
+\caption{Best configuration per band family (TWAP, 30--60min). ``Combined'' multiplies the
+gamma band by a $\sqrt{R(t)/R(0)}$ time-decay factor; ``time-decay'' uses that factor
+alone.}
+\end{table}
+
+\begin{whybox}
+\textbf{The width trap.} The unconstrained winner is the \emph{tightest static band in the
+grid} ($H_0 = 2$, $L_{\text{std}} = 0.4946$), and the static ladder falls monotonically
+into that grid edge ($H_0 = 25$: $0.5568$; $10$: $0.5321$; $5$: $0.5068$; $2$: $0.4947$).
+This is the boundary solution of Section~2.6, not evidence that dynamics fail: at matched
+$H_0$ the dynamic families look far better than static purely because they are narrower on
+average. Only the width-matched comparison separates the two effects.
+\end{whybox}
+
+\textbf{Width-matched comparison.} Setting a static band to each dynamic configuration's
+mean effective width isolates the timing information, and it splits the two mechanisms
+cleanly.
+
+\begin{table}[htbp]
+\centering
+\small
+\begin{tabular}{rrrrr}
+\toprule
+$H_0$ & \textbf{Mean width} & \textbf{Gamma} & \textbf{Combined} & \textbf{Time-decay} \\
+\midrule
+10  & $4.1$  & $+0.22\%$ & $+0.34\%$ & $-0.22\%$ \\
+25  & $10.3$ & $+2.56\%$ & $+1.44\%$ & $-0.25\%$ \\
+50  & $20.6$ & $+3.23\%$ & $+4.38\%$ & $-1.35\%$ \\
+100 & $41.1$ & $+4.02\%$ & $+0.83\%$ & $-8.52\%$ \\
+200 & $82.3$ & $+2.31\%$ & $+2.32\%$ & $-3.31\%$ \\
+\bottomrule
+\end{tabular}
+\caption{Edge over a width-matched static band, \% of $L_{\text{std}}$ (TWAP 60min).
+Positive = dynamic better. Mean width in contract equivalents.}
+\end{table}
+
+Gamma conditioning holds a genuine edge of roughly $2.5$--$4.0\%$ at moderate widths. The
+time-decay factor is \emph{negative} at every width: its rationale was that the forced
+end-of-day flatten is expensive, but the closing-auction discount removes exactly that
+penalty, so shrinking the band into the close pre-pays execution for nothing. The combined
+form inherits a diluted positive edge from its gamma component.
+
+\textbf{Robustness.} On three re-seeded tapes (per-day bootstrap re-drawing contract, side
+and size, with $c$ and the matched widths frozen), the gamma edge is positive on every
+seed ($+1.18\%$, $+0.58\%$, $+0.47\%$), as is the combined form; time-decay remains mixed.
+
+\textbf{Band-edge targeting.} Replacing the full flatten with the edge target of
+Equation~\eqref{eq:sizing} is the strongest single refinement on ES.
+
+\begin{table}[htbp]
+\centering
+\small
+\begin{tabular}{lrrrrr}
+\toprule
+$H_0$ & 5 & 10 & 25 & 50 & 100 \\
+\midrule
+Static band      & $+2.6\%$ & $+5.4\%$ & $+6.0\%$ & $+1.5\%$ & $-9.4\%$ \\
+Combined dynamic & $+0.3\%$ & $+0.8\%$ & $+1.8\%$ & $+1.7\%$ & $+3.7\%$ \\
+\bottomrule
+\end{tabular}
+\caption{Improvement from edge targeting (TWAP 60min); positive = better than full
+flatten.}
+\end{table}
+
+Parking residual delta at the band edge and carrying it to a cheap auction close is worth
+up to $+6\%$ for moderate static widths, though it backfires for wide static bands, where
+too much risk is parked under $\lambda_{\text{risk}} = 1$. The dynamic band removes that
+failure mode --- its shrinking width pulls the parked delta inward --- and the best overall
+configuration is the \textbf{combined dynamic band with edge targeting}
+($H_0 = 5$, $c = 20$: $L_{\text{std}} = 0.4907$, against $0.4946$ for the best
+full-flatten configuration).
+
+\section{Results: SPCX Equity}
+
+\textbf{Data.} 22 trading days (June 16 -- July 17, 2026), 120{,}951 simulated SPCX option
+executions, 1{,}716 five-minute bars. The stock traded \$123.12--\$222.80 (median
+\$155.27) with ATM implied volatility of 70--126\% and a 20-day ADV proxy near
+982{,}000 shares. Cost model: measured half-spread \$0.027/share,
+$\alpha = Y\sigma_{\text{daily}} = 0.0273$, execution-window liquidity
+$L_k = \text{ADV}\times 5/390$, closing-cross impact factor $0.30$, $M_h = 1$.
+
+\begin{table}[htbp]
+\centering
+\small
+\begin{tabular}{lrrr}
+\toprule
+\textbf{Benchmark} & \textbf{Exec.\ cost} & \textbf{Risk (RMS/bar)} & $L_{\text{std}}$ \\
+\midrule
+Zero Hedge & \$9{,}974{,}886   & \$435{,}115 & 1.027 \\
+Full Hedge & \$367{,}974{,}631 & \$0         & 1.000 \\
+\bottomrule
+\end{tabular}
+\caption{SPCX benchmark bounds over 22 days. The selected strategy turns over
+$\approx638{,}000$ shares/day, about 65\% of ADV, so impact rather than spread dominates.}
+\end{table}
+
+\textbf{Only the gamma mechanism is carried over.} The time-decay factor is dropped for
+this book: the Nasdaq closing cross makes the end-of-day flatten cheap, removing the
+penalty that factor was designed to avoid --- the same effect that turned its ES edge
+negative.
+
+\textbf{Gamma signal.} Median $\lvert\Gamma\rvert$ is $2{,}176$ shares/\$, with a
+within-day coefficient of variation of $0.46$ and a max/median ratio of $2.1\times$.
+Across bars gamma correlates with $\lvert\Delta\rvert$ at only $\rho = 0.21$ --- more
+independent information than on ES, but a narrower range over which the band can flex.
+
+\begin{table}[htbp]
+\centering
+\small
+\begin{tabular}{lrrrrr}
+\toprule
+\textbf{Family} & $H_0$ (sh) & $c$ & \textbf{Exec.\ cost} & \textbf{Risk} & $L_{\text{std}}$ \\
+\midrule
+Static & 5{,}000  & ---                & \$88.5M & \$112{,}916 & 0.5001 \\
+Gamma  & 25{,}000 & $2\times10^{-3}$   & \$88.2M & \$113{,}396 & 0.5004 \\
+\bottomrule
+\end{tabular}
+\caption{Best configuration per family (VWAP, 30min). Both cut the objective by
+$\approx51\%$ against Zero Hedge and $\approx50\%$ against Full Hedge --- the first-order
+result on this book.}
+\end{table}
+
+\begin{whybox}
+\textbf{The same width trap, and the same boundary solution.} The unconstrained winner is
+again the tightest static band in the grid, firing $47.6$ hedges/day, with the static
+ladder falling monotonically into the edge ($50$k: $0.5287$; $25$k: $0.5238$; $10$k:
+$0.5088$; $5$k: $0.5001$). No desk trading a book that turns over 65\% of ADV would hedge
+that often, so the unconstrained optimum is not a usable comparison point.
+\end{whybox}
+
+\textbf{Width-matched comparison.} Width-for-width the gamma band is risk-efficient across
+every band width that actually binds, and the edge \emph{grows} with width: wider bands
+bind less often, so the choice of \emph{when} to hedge matters more.
+
+\begin{table}[htbp]
+\centering
+\small
+\begin{tabular}{rrrrr}
+\toprule
+$H_0$ (sh) & \textbf{Mean width} & \textbf{Gamma} $L$ & \textbf{Matched static} $L$ & \textbf{Edge} \\
+\midrule
+25{,}000  & 9{,}049   & 0.5243 & 0.5248 & $+0.11\%$ \\
+50{,}000  & 18{,}098  & 0.5268 & 0.5324 & $+1.06\%$ \\
+100{,}000 & 36{,}195  & 0.5288 & 0.5386 & $+1.82\%$ \\
+200{,}000 & 72{,}391  & 0.5292 & 0.5480 & $+3.42\%$ \\
+300{,}000 & 108{,}586 & 0.5904 & 0.5389 & $-9.55\%$ \\
+\bottomrule
+\end{tabular}
+\caption{Width-matched gamma vs.\ static at $c = 10^{-3}$, TWAP 60min. The edge collapses
+at the widest setting, where the band rarely binds at all and the tilt merely
+over-tightens on the few occasions it does.}
+\end{table}
+
+\textbf{The operational regime.} Capping the hedge budget --- the stand-in for the missing
+per-ticket cost --- is what makes the comparison decision-relevant, and it is where the
+gamma band wins outright.
+
+\begin{table}[htbp]
+\centering
+\small
+\begin{tabular}{lrrrl}
+\toprule
+\textbf{Cap/day} & \textbf{Static} $L$ & \textbf{Gamma} $L$ & \textbf{Edge} & \textbf{Winner} \\
+\midrule
+5    & 0.5242 & 0.5444 & $-3.86\%$ & static \\
+10   & 0.5242 & 0.5338 & $-1.83\%$ & static \\
+15   & 0.5242 & 0.5241 & $+0.01\%$ & level \\
+20   & 0.5238 & 0.5118 & $+2.29\%$ & gamma \\
+30   & 0.5238 & 0.5086 & $+2.91\%$ & gamma \\
+\midrule
+none & 0.5001 & 0.5004 & $-0.06\%$ & static \\
+\bottomrule
+\end{tabular}
+\caption{Best static vs.\ best gamma under a cap on hedge frequency.}
+\end{table}
+
+Below $\approx10$ hedges/day both families are forced so wide that the band rarely binds
+and shape barely matters, so the simpler static rule wins. The two draw level at
+$\approx15$/day, and from $\approx20$/day upward --- the realistic operating range --- the
+gamma band wins by $+2.3\%$ to $+2.9\%$. A fixed hedge budget is precisely the constraint
+that makes \emph{where} hedges are spent matter, which is what
+Equation~\eqref{eq:gammaband} optimizes. The advantage is a capacity-regime effect, not an
+artifact of the risk weight: unconstrained, the degenerate tight static band wins at every
+$\lambda_{\text{risk}} \in [0.25, 4]$.
+
+\textbf{Band-edge targeting.} Unlike on ES, edge targeting adds little here.
+
+\begin{table}[htbp]
+\centering
+\small
+\begin{tabular}{lrrrrr}
+\toprule
+$H_0$ (sh) & 10{,}000 & 25{,}000 & 50{,}000 & 100{,}000 & 200{,}000 \\
+\midrule
+Static band & $+0.59\%$ & $+1.14\%$ & $+2.00\%$ & $+0.31\%$ & $-3.22\%$ \\
+Gamma band  & $+0.10\%$ & $+0.36\%$ & $-0.04\%$ & $-0.20\%$ & $-2.43\%$ \\
+\bottomrule
+\end{tabular}
+\caption{Improvement from edge targeting (TWAP 60min).}
+\end{table}
+
+Carrying residual delta to a cheap auction close is most of what edge targeting buys, and
+on SPCX the closing cross already delivers that to every strategy. Stacked on the gamma
+band it adds essentially nothing, turning negative beyond $25{,}000$ shares: the gamma
+band already tightens where the residual would otherwise be parked.
+
+\textbf{Comparison with ES.} The two books agree on the substance and differ in degree.
+Both show the same boundary solution under a frictionless cost proxy, and on both the
+gamma-conditioned band is risk-efficient width-for-width --- $2.5$--$4.0\%$ on ES,
+up to $3.4\%$ on SPCX. They differ in what the refinement is worth operationally: on ES,
+edge targeting is the larger effect and stacks with the band, whereas on SPCX the closing
+cross absorbs that gain and the gamma tilt only becomes decisive once the hedge budget is
+capped. The dominant caveats are the absence of a fixed per-ticket cost in both cost
+models, and SPCX's short 22-day sample, which is thin for distinguishing effects of a few
+percent.
+
+\end{document}
