@@ -186,9 +186,11 @@ variation.
 \section{The Operational Regime: A Hedge-Frequency Cap}
 
 The unconstrained winner hedges 47.6 times a day, which no desk would do in this name.
-Because the missing ingredient is a fixed per-ticket cost (Section~7), the cleanest
-stand-in is to cap the average number of hedges per day and re-optimize both families
-over the same grid.
+The natural question is what constraint corrects this. A fixed per-ticket cost --- the
+obvious candidate --- turns out to be negligible on this book (Section~7): what actually
+limits a desk pushing 65\% of ADV through the market is capacity and footprint, not ticket
+fees. The faithful instrument is therefore a direct cap on the average number of hedges
+per day; we re-optimize both families under it.
 
 \begin{table}[htbp]
 \centering
@@ -255,13 +257,24 @@ tightens where the residual would otherwise be parked, leaving edge targeting li
 Both cost components are size-proportional -- spread (linear in shares) and square-root-law
 impact (superlinear, $\propto \lvert q \rvert^{1.5}$ once the $q\sqrt{q/L}$ form is
 expanded) -- so both vanish as orders shrink and the model has no mechanism to penalize
-frequent triggering. This is the same structural gap identified in the ES study, and on
-SPCX it is more consequential: charging impact against one bar's liquidity makes each
-individual hedge expensive, which pushes the optimizer toward many small clips even
-harder. The missing term is a \textbf{fixed per-ticket cost}: a charge per child order
-independent of size (exchange and clearing minimums, broker ticket fees, operational
-overhead). Adding it would restore an interior optimal band width and remove the boundary
-solution of Section~3 directly, rather than via the frequency cap used here as a proxy.
+frequent triggering. In the ES study the fix for this was a \emph{fixed per-ticket cost}.
+That fix does \textbf{not} work on SPCX, and it is worth stating why, since the intuition
+is misleading. Re-optimizing the whole grid under a fixed charge per child order, the
+optimum does not move off the tight band until $C_{\text{ticket}}$ reaches roughly
+\$20{,}000 \emph{per order} --- two to three orders of magnitude above any plausible
+exchange, clearing or operational charge. A realistic \$10--\$100 per order is under
+$0.2\%$ of execution cost and changes nothing. The reason is scale: impact here runs to
+tens of millions of dollars because hedge clips are a large fraction of ADV, so a fee
+charged per \emph{order} rather than per \emph{share} is a rounding error. (This is exactly
+where SPCX and ES diverge: on ES, whose total execution cost is a thousand times smaller,
+the same \$10--\$100 per order is $4$--$20\%$ of cost and does shift the optimum.)
+
+What the SPCX model genuinely lacks is not a per-ticket cost but a \textbf{floor on order
+splitting}: a minimum clip size, or a temporary-impact term that decays rather than
+rewarding unbounded subdivision (splitting a parent into $n$ children costs
+$Q^{1.5}n^{-1/2}$, which falls without limit in $n$). Absent that, the hedge-frequency cap
+of Section~5 is the honest instrument --- and, as argued there, the operationally correct
+one for a book of this size.
 
 Two further caveats specific to this sample. The 22-day window is short -- one fifth of
 the ES sample -- so the width-matched percentages should be read as indicative, and the
@@ -272,10 +285,11 @@ change the balance between waiting for offsetting flow and hedging.
 \section{Possible Improvements}
 
 \begin{enumerate}
-\item \textbf{Fixed per-ticket cost.} Replace the frequency cap with an explicit
-  $C_{\text{ticket}}$ per child order. This is the single highest-value change: it makes
-  the optimal band width interior and the static-vs-gamma comparison decision-relevant
-  without an externally imposed constraint.
+\item \textbf{A floor on order splitting.} The boundary solution comes from impact that
+  rewards unbounded subdivision. A minimum clip size or a decaying temporary-impact term
+  would make the optimal band width interior without an externally imposed frequency cap.
+  (A fixed per-ticket cost, the analogous fix on ES, does not achieve this here --- it is
+  negligible against this book's impact costs; see Section~7.)
 \item \textbf{Extend the sample.} 22 days is thin for distinguishing effects of 1--3\%.
   Extending the SPCX window, or bootstrapping across days, would put error bars on the
   width-matched edge.

@@ -271,11 +271,16 @@ set to the gamma configuration's \emph{mean effective width}, under identical
 $\epsilon$, cooldown, horizon and method.
 
 \textbf{Hedge-frequency capping.} The cost proxy in Equation~\eqref{eq:cost} contains no
-fixed per-ticket charge, and impact is concave in clip size, so splitting a hedge into
-more, smaller child orders is strictly cheaper in the model with no floor. Unconstrained
-grid search consequently runs away toward the tightest band available --- a boundary
-solution, not a strategy. Capping the average number of hedges per day stands in for the
-missing per-ticket cost and restores an interior, decision-relevant optimum.
+floor on order splitting, and impact is concave in clip size ($Q^{1.5}n^{-1/2}$ for $n$
+children), so splitting a hedge into more, smaller child orders is strictly cheaper in the
+model without limit. Unconstrained grid search consequently runs away toward the tightest
+band available --- a boundary solution, not a strategy. Capping the average number of
+hedges per day restores an interior, decision-relevant optimum. On ES the same effect can
+be obtained with a fixed per-ticket cost (execution cost there is small enough that a
+plausible per-order charge bites); on SPCX, whose execution cost is a thousand times
+larger, a per-ticket charge is negligible and the cap is the faithful instrument --- what
+constrains a book pushing a large fraction of ADV is capacity and footprint, not ticket
+fees. The results sections quantify this for each book.
 
 \subsection{Parameter Grid}
 
@@ -559,8 +564,12 @@ gamma-conditioned band is risk-efficient width-for-width --- $2.5$--$4.0\%$ on E
 up to $3.4\%$ on SPCX. They differ in what the refinement is worth operationally: on ES,
 edge targeting is the larger effect and stacks with the band, whereas on SPCX the closing
 cross absorbs that gain and the gamma tilt only becomes decisive once the hedge budget is
-capped. The dominant caveats are the absence of a fixed per-ticket cost in both cost
-models, and SPCX's short 22-day sample, which is thin for distinguishing effects of a few
-percent.
+capped. They also differ in how the boundary solution is best corrected: on ES a realistic
+fixed per-ticket cost ($\sim$\$100 per order is $\sim$20\% of execution cost) moves the
+optimum to a wider band, whereas on SPCX the same charge is negligible and the missing
+ingredient is instead a floor on order splitting (a minimum clip size, or decaying
+temporary impact). The dominant shared caveat is that absent such a floor, both cost
+models reward unbounded subdivision; SPCX's short 22-day sample is a further caveat,
+thin for distinguishing effects of a few percent.
 
 \end{document}

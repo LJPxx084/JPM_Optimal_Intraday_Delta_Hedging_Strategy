@@ -174,10 +174,17 @@ almost monotonically better. What the model \emph{lacks} is a \emph{fixed per-ti
 cost} -- a charge per order independent of size (exchange/clearing minimums, broker
 ticket fees, operational overhead). Any positive per-ticket cost penalizes
 high-frequency triggering, shifts the optimal band width to an interior value, and
-makes the band-design comparisons more decision-relevant. The very tight end of all
-results above should therefore be read as a model artifact, not a trading
-recommendation; the moderate-width regime is the operationally relevant one, and it is
-exactly where the dynamic-band and edge-targeting refinements earn their keep.
+makes the band-design comparisons more decision-relevant. Re-optimizing the grid under
+a fixed charge per child order confirms this is a first-order effect on ES: at
+\$10 per order the ticket bill is already $\approx 9\%$ of execution cost, and by
+$\approx$\$100 per order the optimum leaves the tightest band ($\approx 79$ hedges/day)
+for a moderate one ($H = 25$, $\approx 24$/day), moving further out as the charge rises.
+The very tight end of all results above should therefore be read as a model artifact, not
+a trading recommendation; the moderate-width regime is the operationally relevant one, and
+it is exactly where the dynamic-band and edge-targeting refinements earn their keep.
+(This is specific to ES's execution-cost scale: on the SPCX book, whose execution cost is
+roughly a thousand times larger, the same per-order charge is negligible and a floor on
+order splitting is required instead.)
 
 \section{Possible Improvements}
 
