@@ -224,7 +224,8 @@ C_{\text{exec}} = \sum_k M_h \lvert q_k \rvert
 divergence is deliberate rather than a porting artifact. On ES, $\alpha$ is anchored so a
 1-lot pays $\approx0.5$bp of notional at median ADV, and $L_k$ is full-day ADV --- both
 harmless for an instrument whose hedge clips are $\sim\!10^{-4}$ of ADV. Neither survives
-on SPCX, where clips run to tens of percent of ADV: there $\alpha = Y\sigma_{\text{daily}}$
+on SPCX, where a hedge clip is a meaningful fraction of a five-minute execution window's
+liquidity even though it is small against full-day ADV: there $\alpha = Y\sigma_{\text{daily}}$
 follows the square-root law of impact (Toth--Bouchaud, $Y = 0.5$), anchoring impact to the
 book's own volatility, and $L_k$ is the liquidity of the fill's \emph{execution window}
 ($\text{ADV}\times 5/390$ for an intraday child) rather than the whole day. Both books
@@ -273,14 +274,13 @@ $\epsilon$, cooldown, horizon and method.
 \textbf{Hedge-frequency capping.} The cost proxy in Equation~\eqref{eq:cost} contains no
 floor on order splitting, and impact is concave in clip size ($Q^{1.5}n^{-1/2}$ for $n$
 children), so splitting a hedge into more, smaller child orders is strictly cheaper in the
-model without limit. Unconstrained grid search consequently runs away toward the tightest
-band available --- a boundary solution, not a strategy. Capping the average number of
-hedges per day restores an interior, decision-relevant optimum. On ES the same effect can
-be obtained with a fixed per-ticket cost (execution cost there is small enough that a
-plausible per-order charge bites); on SPCX, whose execution cost is a thousand times
-larger, a per-ticket charge is negligible and the cap is the faithful instrument --- what
-constrains a book pushing a large fraction of ADV is capacity and footprint, not ticket
-fees. The results sections quantify this for each book.
+model without limit. When impact is large enough, unconstrained grid search runs away toward
+the tightest band available --- a boundary solution, not a strategy --- and capping the
+average number of hedges per day restores an interior optimum. Whether that device is needed
+is book-specific. On ES a fixed per-ticket cost bites (execution cost there is small enough
+that a plausible per-order charge moves the optimum). On the SPCX book the optimum is already
+an interior, wide band, so neither a per-ticket cost nor a frequency cap is required. The
+results sections quantify this for each book.
 
 \subsection{Parameter Grid}
 
@@ -426,12 +426,12 @@ full-flatten configuration).
 
 \section{Results: SPCX Equity}
 
-\textbf{Data.} 22 trading days (June 16 -- July 17, 2026), 120{,}951 simulated SPCX option
-executions, 1{,}716 five-minute bars. The stock traded \$123.12--\$222.80 (median
-\$155.27) with ATM implied volatility of 70--126\% and a 20-day ADV proxy near
-982{,}000 shares. Cost model: measured half-spread \$0.027/share,
-$\alpha = Y\sigma_{\text{daily}} = 0.0273$, execution-window liquidity
-$L_k = \text{ADV}\times 5/390$, closing-cross impact factor $0.30$, $M_h = 1$.
+\textbf{Data.} 22 trading days (June 16 -- July 17, 2026), 12{,}092 simulated SPCX option
+executions (JPM modeled at $1\%$ of option flow), 1{,}716 five-minute bars. The stock traded
+\$123.12--\$222.80 (median \$155.27) with ATM implied volatility of 70--126\% and a 20-day ADV
+of $\approx60.9$M shares (\$9.5B/day), from real Nasdaq daily bars. Cost model: measured
+half-spread \$0.027/share, $\alpha = Y\sigma_{\text{daily}} = 0.0273$, execution-window
+liquidity $L_k = \text{ADV}\times 5/390$, closing-cross impact haircut, $M_h = 1$.
 
 \begin{table}[htbp]
 \centering
@@ -440,12 +440,14 @@ $L_k = \text{ADV}\times 5/390$, closing-cross impact factor $0.30$, $M_h = 1$.
 \toprule
 \textbf{Benchmark} & \textbf{Exec.\ cost} & \textbf{Risk (RMS/bar)} & $L_{\text{std}}$ \\
 \midrule
-Zero Hedge & \$9{,}974{,}886   & \$435{,}115 & 1.027 \\
-Full Hedge & \$367{,}974{,}631 & \$0         & 1.000 \\
+Zero Hedge & \$154{,}125     & \$226{,}538 & 1.015 \\
+Full Hedge & \$10{,}528{,}317 & \$0         & 1.000 \\
 \bottomrule
 \end{tabular}
 \caption{SPCX benchmark bounds over 22 days. The selected strategy turns over
-$\approx638{,}000$ shares/day, about 65\% of ADV, so impact rather than spread dominates.}
+$\approx114{,}000$ shares/day, under $0.2\%$ of ADV. Impact dominates spread
+($\approx\$0.69$ vs.\ \$0.027 per share all-in): the binding cost on this book is footprint,
+not the quoted spread.}
 \end{table}
 
 \textbf{Only the gamma mechanism is carried over.} The time-decay factor is dropped for
@@ -453,10 +455,10 @@ this book: the Nasdaq closing cross makes the end-of-day flatten cheap, removing
 penalty that factor was designed to avoid --- the same effect that turned its ES edge
 negative.
 
-\textbf{Gamma signal.} Median $\lvert\Gamma\rvert$ is $2{,}176$ shares/\$, with a
-within-day coefficient of variation of $0.46$ and a max/median ratio of $2.1\times$.
-Across bars gamma correlates with $\lvert\Delta\rvert$ at only $\rho = 0.21$ --- more
-independent information than on ES, but a narrower range over which the band can flex.
+\textbf{Gamma signal.} Median $\lvert\Gamma\rvert$ is $488$ shares/\$, with a within-day
+coefficient of variation of $0.46$ and a max/median ratio of only $1.6\times$. Across bars
+gamma correlates with $\lvert\Delta\rvert$ at $\rho = 0.53$: a good part of the gamma signal
+is already in delta, and the range over which the band can flex is narrow.
 
 \begin{table}[htbp]
 \centering
@@ -465,26 +467,28 @@ independent information than on ES, but a narrower range over which the band can
 \toprule
 \textbf{Family} & $H_0$ (sh) & $c$ & \textbf{Exec.\ cost} & \textbf{Risk} & $L_{\text{std}}$ \\
 \midrule
-Static & 5{,}000  & ---                & \$88.5M & \$112{,}916 & 0.5001 \\
-Gamma  & 25{,}000 & $2\times10^{-3}$   & \$88.2M & \$113{,}396 & 0.5004 \\
+Static & 200{,}000 & ---                & \$1.74M & \$78{,}303 & 0.5110 \\
+Gamma  & 300{,}000 & $2\times10^{-4}$   & \$1.74M & \$78{,}303 & 0.5110 \\
 \bottomrule
 \end{tabular}
 \caption{Best configuration per family (VWAP, 30min). Both cut the objective by
-$\approx51\%$ against Zero Hedge and $\approx50\%$ against Full Hedge --- the first-order
-result on this book.}
+$\approx50\%$ against Zero Hedge and $\approx49\%$ against Full Hedge --- the first-order
+result on this book. Best static and best gamma are \emph{identical} to four decimals: the
+winning tilt ($c = 2\times10^{-4}$) leaves the band static in all but name.}
 \end{table}
 
 \begin{whybox}
-\textbf{The same width trap, and the same boundary solution.} The unconstrained winner is
-again the tightest static band in the grid, firing $47.6$ hedges/day, with the static
-ladder falling monotonically into the edge ($50$k: $0.5287$; $25$k: $0.5238$; $10$k:
-$0.5088$; $5$k: $0.5001$). No desk trading a book that turns over 65\% of ADV would hedge
-that often, so the unconstrained optimum is not a usable comparison point.
+\textbf{The optimum is a wide, interior band.} Because the impact proxy rewards splitting a
+hedge into ever-smaller children, one must check the optimum is not sitting on the tight edge
+of the grid. It is not: the static ladder is \emph{U-shaped} with an interior minimum
+($H_0 = 5$k: $0.552$; $25$k: $0.569$; $100$k: $0.565$; $\mathbf{200}$\textbf{k}:
+$\mathbf{0.511}$; $300$k: $0.712$). The best band is \emph{wide} and fires only $\approx0.4$
+hedges/day; tighter bands are strictly worse because impact is not negligible. The grid
+optimum is well-behaved, needing no per-ticket cost or hedge-frequency cap to make it interior.
 \end{whybox}
 
-\textbf{Width-matched comparison.} Width-for-width the gamma band is risk-efficient across
-every band width that actually binds, and the edge \emph{grows} with width: wider bands
-bind less often, so the choice of \emph{when} to hedge matters more.
+\textbf{Width-matched comparison.} Width-for-width the gamma band remains mildly
+risk-efficient across the widths that bind, but the edge does not carry to the optimum.
 
 \begin{table}[htbp]
 \centering
@@ -493,21 +497,21 @@ bind less often, so the choice of \emph{when} to hedge matters more.
 \toprule
 $H_0$ (sh) & \textbf{Mean width} & \textbf{Gamma} $L$ & \textbf{Matched static} $L$ & \textbf{Edge} \\
 \midrule
-25{,}000  & 9{,}049   & 0.5243 & 0.5248 & $+0.11\%$ \\
-50{,}000  & 18{,}098  & 0.5268 & 0.5324 & $+1.06\%$ \\
-100{,}000 & 36{,}195  & 0.5288 & 0.5386 & $+1.82\%$ \\
-200{,}000 & 72{,}391  & 0.5292 & 0.5480 & $+3.42\%$ \\
-300{,}000 & 108{,}586 & 0.5904 & 0.5389 & $-9.55\%$ \\
+25{,}000  & 16{,}520  & 0.5685 & 0.5793 & $+1.86\%$ \\
+50{,}000  & 33{,}039  & 0.5706 & 0.5730 & $+0.42\%$ \\
+100{,}000 & 66{,}079  & 0.5669 & 0.5806 & $+2.36\%$ \\
+200{,}000 & 132{,}158 & 0.5657 & 0.5755 & $+1.71\%$ \\
+300{,}000 & 198{,}236 & 0.5704 & 0.5441 & $-4.84\%$ \\
 \bottomrule
 \end{tabular}
-\caption{Width-matched gamma vs.\ static at $c = 10^{-3}$, TWAP 60min. The edge collapses
-at the widest setting, where the band rarely binds at all and the tilt merely
-over-tightens on the few occasions it does.}
+\caption{Width-matched gamma vs.\ static at $c = 10^{-3}$, TWAP 60min. The edge is $+0.4\%$
+to $+2.4\%$ across binding widths and collapses at the widest setting, where the band rarely
+binds and the tilt merely over-tightens.}
 \end{table}
 
-\textbf{The operational regime.} Capping the hedge budget --- the stand-in for the missing
-per-ticket cost --- is what makes the comparison decision-relevant, and it is where the
-gamma band wins outright.
+\textbf{The operational regime.} A hedge-frequency cap does not bind: the grid optimum
+already fires $\approx0.4$ hedges/day --- below even a 5/day cap --- so capping changes
+nothing and static wins or ties at every level.
 
 \begin{table}[htbp]
 \centering
@@ -516,28 +520,27 @@ gamma band wins outright.
 \toprule
 \textbf{Cap/day} & \textbf{Static} $L$ & \textbf{Gamma} $L$ & \textbf{Edge} & \textbf{Winner} \\
 \midrule
-5    & 0.5242 & 0.5444 & $-3.86\%$ & static \\
-10   & 0.5242 & 0.5338 & $-1.83\%$ & static \\
-15   & 0.5242 & 0.5241 & $+0.01\%$ & level \\
-20   & 0.5238 & 0.5118 & $+2.29\%$ & gamma \\
-30   & 0.5238 & 0.5086 & $+2.91\%$ & gamma \\
+5    & 0.5110 & 0.5110 & $0.00\%$  & static \\
+10   & 0.5110 & 0.5110 & $0.00\%$  & static \\
+15   & 0.5110 & 0.5110 & $0.00\%$  & static \\
+20   & 0.5110 & 0.5110 & $0.00\%$  & static \\
+30   & 0.5110 & 0.5110 & $0.00\%$  & static \\
 \midrule
-none & 0.5001 & 0.5004 & $-0.06\%$ & static \\
+none & 0.5110 & 0.5110 & $+0.00\%$ & tie \\
 \bottomrule
 \end{tabular}
-\caption{Best static vs.\ best gamma under a cap on hedge frequency.}
+\caption{Best static vs.\ best gamma under a cap on hedge frequency. Every row is identical
+because the wide-band optimum fires far below the tightest cap.}
 \end{table}
 
-Below $\approx10$ hedges/day both families are forced so wide that the band rarely binds
-and shape barely matters, so the simpler static rule wins. The two draw level at
-$\approx15$/day, and from $\approx20$/day upward --- the realistic operating range --- the
-gamma band wins by $+2.3\%$ to $+2.9\%$. A fixed hedge budget is precisely the constraint
-that makes \emph{where} hedges are spent matter, which is what
-Equation~\eqref{eq:gammaband} optimizes. The advantage is a capacity-regime effect, not an
-artifact of the risk weight: unconstrained, the degenerate tight static band wins at every
-$\lambda_{\text{risk}} \in [0.25, 4]$.
+Because the optimum hedges rarely, there is no scarce hedge budget whose allocation gamma
+could improve --- allocating hedges to high-convexity moments, which
+Equation~\eqref{eq:gammaband} optimizes, only helps when hedges are scarce. Across
+$\lambda_{\text{risk}} \in [0.25, 4]$ the gamma band likewise only ties or leads the static
+band by $\le +0.4\%$.
 
-\textbf{Band-edge targeting.} Unlike on ES, edge targeting adds little here.
+\textbf{Band-edge targeting.} Mildly positive for moderate widths of either shape, negative
+only for the widest bands.
 
 \begin{table}[htbp]
 \centering
@@ -546,30 +549,24 @@ $\lambda_{\text{risk}} \in [0.25, 4]$.
 \toprule
 $H_0$ (sh) & 10{,}000 & 25{,}000 & 50{,}000 & 100{,}000 & 200{,}000 \\
 \midrule
-Static band & $+0.59\%$ & $+1.14\%$ & $+2.00\%$ & $+0.31\%$ & $-3.22\%$ \\
-Gamma band  & $+0.10\%$ & $+0.36\%$ & $-0.04\%$ & $-0.20\%$ & $-2.43\%$ \\
+Static band & $+1.04\%$ & $+3.50\%$ & $+2.04\%$ & $+0.52\%$ & $-15.02\%$ \\
+Gamma band  & $+0.86\%$ & $+0.80\%$ & $+2.33\%$ & $+2.12\%$ & $-1.17\%$ \\
 \bottomrule
 \end{tabular}
 \caption{Improvement from edge targeting (TWAP 60min).}
 \end{table}
 
-Carrying residual delta to a cheap auction close is most of what edge targeting buys, and
-on SPCX the closing cross already delivers that to every strategy. Stacked on the gamma
-band it adds essentially nothing, turning negative beyond $25{,}000$ shares: the gamma
-band already tightens where the residual would otherwise be parked.
+Carrying residual delta to a cheap auction close is most of what edge targeting buys, and on
+SPCX the closing cross already delivers that to every strategy, so the effect is small and
+unsystematic --- a minor tuning knob, not a driver.
 
-\textbf{Comparison with ES.} The two books agree on the substance and differ in degree.
-Both show the same boundary solution under a frictionless cost proxy, and on both the
-gamma-conditioned band is risk-efficient width-for-width --- $2.5$--$4.0\%$ on ES,
-up to $3.4\%$ on SPCX. They differ in what the refinement is worth operationally: on ES,
-edge targeting is the larger effect and stacks with the band, whereas on SPCX the closing
-cross absorbs that gain and the gamma tilt only becomes decisive once the hedge budget is
-capped. They also differ in how the boundary solution is best corrected: on ES a realistic
-fixed per-ticket cost ($\sim$\$100 per order is $\sim$20\% of execution cost) moves the
-optimum to a wider band, whereas on SPCX the same charge is negligible and the missing
-ingredient is instead a floor on order splitting (a minimum clip size, or decaying
-temporary impact). The dominant shared caveat is that absent such a floor, both cost
-models reward unbounded subdivision; SPCX's short 22-day sample is a further caveat,
-thin for distinguishing effects of a few percent.
+\textbf{Comparison with ES.} The gamma-conditioned band is risk-efficient at a matched width
+on both books ($2.5$--$4.0\%$ on ES, up to $\approx2.4\%$ on SPCX), but its operational value
+differs. On ES a realistic per-ticket cost bites and edge targeting stacks with the band. On
+SPCX, hedging is cheap relative to the book, the optimum is a wide, rarely-firing band, and
+neither gamma conditioning nor a hedge-frequency cap changes the ranking. The shared caveat is
+the frictionless proxy's lack of a floor on order splitting; SPCX's short 22-day sample is a
+further one.
+
 
 \end{document}
